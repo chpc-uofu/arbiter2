@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Arbiter2 Log Search</title>
+<meta charset="utf-8" />
+<style>
+
+html, body {
+    margin: 0;
+    padding: 0;
+    font-family: "Roboto", sans-serif;
+}
+
+img {
+    padding-bottom: 20px;
+    width: 20%;
+}
+
+p {
+    margin: 5px 0 5px 0;
+    padding: 0;
+}
+
+#submit {
+    background-color: #d0ebff;
+    color: black;
+    border-radius: 0;
+    padding: 5px 20px 5px 20px;
+    margin-right: 20px;
+    border: 1px solid black;
+    transition: 0.5s;
+}
+
+#submit:hover {
+    background-color: #a5d8ff;
+}
+
+input {
+    padding: 5px 10px 5px 10px;
+    border-radius: 0;
+    border: 1px solid black;
+    margin-right: 25px;
+}
+
+.centercontent {
+    width: 50%;
+    min-width: 500px;
+    padding: 20px;
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.15), 0 6px 20px 0 rgba(0, 0, 0, 0.1);
+    margin: 50px auto 50px auto;
+    border-radius: 4px;
+}
+
+h1 {
+    font-weight: 300;
+    font-size: 150%;
+    margin: 0 0 5px 0;
+    padding: 0;
+    color: #cc0000;
+}
+
+h2 {
+    font-weight: 300;
+    font-size: 120%;
+    margin: 15px 0 2px 0;
+    padding: 0;
+}
+
+.inputgroup {
+    margin-bottom: 40px;
+    padding: 0 20px 0 0;
+}
+
+#log {
+    width: 100%;
+}
+
+.small {
+    font-size: 75%;
+    margin-top: 15px;
+}
+
+.small a {
+    text-decoration: none;
+}
+
+</style>
+</head>
+<body>
+
+<script type="text/javascript">
+    function redirect() {
+        var start = document.getElementById("start").value,
+            end = document.getElementById("end").value,
+            logdir = document.getElementById("log").value;
+        var url = "/" + start + "/" + end + logdir;
+        console.log(url);
+        location.assign(url);
+    }
+</script>
+
+<div class="centercontent">
+
+    <img src="/static/logo.svg" id="logo" />
+
+    <div class="inputgroup">
+        <h1>Log Information</h1>
+        <p>Log files are located from this top-level directory. Be careful! All subdirectories will be traversed and this will use considerable resources if it is not specific enough.</p>
+        Log path: <input type="text" id="log" value="{{ logpath }}">
+    </div>
+
+    <div class="inputgroup">
+        <h1>Date Information</h1>
+        <p>Summaries are derived from log files in the given date range. Reducing the time between the start and end dates will result in faster searches.</p>
+        Start: <input type="date" id="start" value="{{ startdate }}">
+        End: <input type="date" id="end" value = "{{ enddate }}">
+    </div>
+
+    <button id="submit" onClick="redirect();">Update selections</button>
+
+    <p><em>This site stores query information in the URL. You can share or bookmark common reports.</em></p>
+
+</div>
+
+<div class="centercontent">
+    <h1>Output</h1>
+    <div>{{ output|safe }}</div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,3 @@
+# This is a partial overriding configuration that turns on debug mode. This means emails about violations are only sent to admins and quotas are not set (and debug info is added to those emails). This has the effect of allowing unprivledged users to run arbiter (typically for testing purposes).
+[general]
+debug_mode = true

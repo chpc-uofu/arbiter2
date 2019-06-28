@@ -1,0 +1,7 @@
+<h2>Violation of usage policy</h2>
+<p>A <strong>violation of the usage policy</strong> by <strong>{} ({})</strong> on {} was automatically detected starting at {}.</p>
+<p>This may indicate that you are running computationally-intensive work on the interactive node (when it should be run on compute nodes instead).</p>
+<p>You now have the status <strong>{}</strong> because your usage has exceeded the thresholds for appropriate usage on the node. Your CPU usage is now limited to {}% of your original limit ({}) for the next {} minutes. In addition, your memory limit is {}% of your original limit ({} GB) for the same period of time.</p>
+
+<h2>High-impact processes</h2>
+<p>Usage values are recent averages. Instantaneous usage metrics may differ. The processes listed are probable suspects, but there may be some variation in the processes responsible for your impact on the node. Memory usage is expressed in GB and CPU usage is relative to one core (and may exceed 100% as a result).</p>

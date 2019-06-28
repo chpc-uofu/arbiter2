@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Plots of Usage Information</title>
+<meta charset="utf-8" />
+<style>
+
+html, body {
+    margin: 0;
+    padding: 0;
+    font-family: "Roboto", sans-serif;
+}
+
+p {
+    padding: 10px;
+}
+
+img {
+    padding: 35px;
+}
+
+#logo {
+    width: 150px;
+    padding: 20px;
+}
+
+.imgroup {
+    text-align: center;
+}
+
+</style>
+</head>
+<body>
+
+<img src="/static/logo.svg" id="logo" />
+
+<p>This information is associated with <em>{{ uid }}</em>. It's based on information from <a href="/log{{ location }}">{{ location }}</a>. {{ further_info }}</p>
+
+<p>The usage metrics are only collected when users' badness scores are nonzero. As a consequence, some information may not be available, particularly when usage is low and when the user is already in a penalty state. Such regions will appear blank on the plots.</p>
+
+<div class="imgroup">
+    <img src="{{ cpu }}" />
+    <img src="{{ mem }}" />
+</div>
+
+<p>The process-specific information is provided below.</p>
+
+<div class="imgroup">
+    <img src="{{ cpubyproc }}" />
+    <img src="{{ membyproc }}" />
+</div>
+
+<p>This page, including the plots it contains, was generated automatically at the time of the request.</p>
+
+</body>
+</html>

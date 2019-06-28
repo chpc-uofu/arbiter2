@@ -1,0 +1,195 @@
+# 1 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9] --slice=user-[0-9] sleep 10
+# 2 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9] --slice=user-[0-9][0-9] sleep 10
+# 3 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9] sleep 10
+# 4 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9] sleep 10
+# 5 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9] sleep 10
+# 6 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 7 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 8 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 9 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 10 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 11 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 12 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 13 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 14 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10
+# 15 digits
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chmod g+w /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/cpu/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/cpu.cfs_quota_us
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.limit_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/chgrp arbiter /sys/fs/cgroup/memory/user.slice/user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice/memory.memsw.max_usage_in_bytes
+arbiter ALL=(ALL) NOPASSWD: /bin/systemctl set-property user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].slice CPUAccounting=true MemoryAccounting=true --no-ask-password
+arbiter ALL=(ALL) NOPASSWD: /usr/bin/systemd-run --uid=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] --slice=user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] sleep 10

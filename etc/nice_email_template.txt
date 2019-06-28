@@ -1,0 +1,3 @@
+<h2>Return to normal status</h2>
+<p>User <strong>{} ({})</strong> has now returned to <strong>{}</strong> status (as of {}).</p>
+<p>Continued excessive usage (beyond established thresholds) may result in lower limits (higher throttling) for longer periods of time. If you have not yet addressed the issues that caused your resources to be limited, your limits will be further reduced shortly.</p>

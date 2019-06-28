@@ -1,0 +1,89 @@
+[general]
+# Whether or not to actually email users and set quotas
+debug_mode = false
+# Arbiter will evaluate users for violations every 30s, with 3 points of information
+arbiter_refresh = 30
+history_per_refresh = 3
+min_uid = 1000  # i.e. non-service accounts
+
+[self]
+# Arbiter's groupname (used for sudoers permissions and the --exit-file flag)
+groupname = "arbiter"
+
+[badness]
+# Change these to match your policy
+max_history_kept = 180  # arbiter_refresh / history_per_refresh * 180 seconds of history for plots
+cpu_badness_threshold = 0.45
+mem_badness_threshold = 0.5
+time_to_max_bad = 600  # 10 minutes
+time_to_min_bad = 1800  # 30 minutes
+
+[email]
+email_domain = 'organization.edu'  # Used for a generic email addr integration in integrations.py
+from_email = 'noreply+arbiter@organization.edu'
+admin_emails = ['john.doe@organization.edu']
+mail_server = '0.0.0.0'
+keep_plots = false
+plot_location = '../logs/%H/plots'  # %H means hostname, see special values. Make sure you create this directory before arbiter starts
+
+[database]
+
+[processes]
+memsw = true
+pss = true  # Requires CAP_SYS_PTRACE capability! See the install guide for info.
+whitelist = ['gcc', 'clang']
+whitelist_file = '../etc/whitelist.txt'
+
+[status]
+# A status group is selected by picking the first listed here that the user's uids or gids match.
+order = ['invincible', 'admin', 'normal']
+# If a user doesn't match into the status groups above, they land in the fallback status group
+fallback_status = 'normal'
+div_cpu_quotas_by_threads_per_core = true
+
+  [status.normal]
+  cpu_quota = 800  # 8 virtual cores
+  mem_quota = 4  # Gigabyte
+
+  [status.admin]
+  uids = [1000]
+  # gids = [gid_of_admin, ]
+  cpu_quota = 1600  # 16 virtual cores
+  mem_quota = 6   # Gigabyte
+  whitelist = ['bash', 'python', 'python3']
+
+  [status.invincible]
+  cpu_quota = 1e10
+  mem_quota = 1e10   # Gigabyte
+
+  [status.penalty]
+  relative_quotas = true  # Note the relative_quotas, makes the *_quota less than 1
+  order = ['penalty1', 'penalty2', 'penalty3']
+  occur_timeout = 10800  # 3 hours
+
+    [status.penalty.penalty1]
+    timeout = 1800  # 30 mins
+    cpu_quota = 0.8
+    mem_quota = 0.8
+    expression = 'new'
+
+    [status.penalty.penalty2]
+    timeout = 3600
+    cpu_quota = 0.5
+    mem_quota = 0.5
+    expression = 'repeated'
+
+    [status.penalty.penalty3]
+    timeout = 7200
+    cpu_quota = 0.3
+    mem_quota = 0.3
+    expression = 'severe'
+
+[high_usage_watcher]
+high_usage_watcher = true
+cpu_usage_threshold = 0.9
+mem_usage_threshold = 0.25
+timeout = 600  # warn at most every 10 minutes
+div_cpu_thresholds_by_threads_per_core = true
+user_count = 8
+

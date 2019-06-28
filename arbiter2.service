@@ -1,0 +1,58 @@
+[Unit]
+Description=Arbiter2
+Documentation=https://gitlab.chpc.utah.edu/arbiter2/arbiter2
+# TODO: May need to change these depending on your setup (like adding network file system target)
+# Requires network to send mail and correctly get the hostname
+Wants=sendmail.service sssd.service network.target network-online.target
+After=sendmail.service sssd.service network.target network-online.target
+
+# User slice cgroup accounting is enabled by Arbiter2 script with Slice= or
+# the -a flag. If enabling differently, may want to uncomment these.
+# ConditionControlGroupController=cpu mem
+# ConditionPathExistsGlob=/sys/fs/cgroup/cpu/user.slice/user-*.slice/ /sys/fs/cgroup/mem/user.slice/user-*.slice/
+
+[Service]
+
+# -- User Settings -- #
+# Run as unprivileged arbiter for security
+User=arbiter
+# Enable cgroup accounting by running in user.slice, instead of system.slice (default with Slice=)
+# TODO: Lookup uid of arbiter and put it here. Systemd's %U variable may work for system accounts
+Slice=user-<ARBITER UID>.slice
+CPUAccounting=true
+MemoryAccounting=true
+
+# Allows for Arbiter2 to use pss in /proc/<pid>/smaps (assuming pss = true in the
+# config), typically you'd use "CapabilityBoundingSet=CAP_SYS_PTRACE", but this
+# only works on binaries. Ambient allows for interpreted programs (python) to
+# still use these capabilities. See the install guide for more info.
+AmbientCapabilities=CAP_SYS_PTRACE
+
+# -- Runtime Settings -- #
+Type=simple
+# TODO: Set this to the arbiter directory!
+Environment=ARBITER_DIR=
+# TODO: Set the working directory; must be a absolute path, cannot contain a environment variable
+WorkingDirectory=/home/arbiter/
+# TODO: Make sure the Python executable is correct and args are correct (try running this line)
+ExecStart=/usr/local/bin/python3.6 ${ARBITER_DIR}/arbiter/arbiter.py -g ../etc/config.toml -s  # RHEL7/CENTOS7: --rhel7-compat
+# It may be smart to put your configuration in it's own etc/sitename folder (with a copy of etc/) to make upgrading easier
+# ExecStart=/usr/local/bin/python3.6 ${ARBITER_DIR}/arbiter/arbiter.py -s -e ../etc/sitename -g ../etc/sitename/config.toml  # RHEL7/CENTOS7: --rhel7-compat
+
+# -- Restarting Controls -- #
+# If Arbiter fails for some reason, we'll want to restart in that case
+Restart=on-failure
+# If there is a configuration or argument issue, Arbiter2 exits with a error
+# code of 2. Don't restart in that case.
+RestartPreventExitStatus=2
+
+# If Arbiter2 exits due to the --exit-file functionality, it exits with a code
+# of 143. If Restart=on-failure is not set and the --exit-file flag is used,
+# you'll want to uncomment the line below
+# RestartForceExitStatus=143
+
+[Install]
+# TODO: Adjust the WantedBy=
+# Some INTs boot to 'graphical.target' for virtualGL, may need to adjust
+# WantedBy=multi-user.target
+WantedBy=graphical.target

@@ -1,0 +1,33 @@
+<p>Arbiter2 has detected that there is high usage on {} at {}.</p>
+
+<h2>Node details</h2>
+<p>The node has {} physical cores  (with {} {} each), {} GB of memory, and {} GB of swap.</p>
+    
+<h2>Usage</h2>
+
+<table>
+    <tr>
+        <td>CPU usage (%)</td>
+        <td>Memory usage (%)</td>
+        <td>Swap usage (%)</td>
+    </tr>
+    <tr>
+        <td>{:0.2f}</td>
+        <td>{:0.2f}</td>
+        <td>{:0.2f}</td>
+    </tr>
+</table>
+
+<h2>Users with high usage</h2>
+<table>
+    <tr>
+        <td>User</td>
+        <td>CPU usage (%)</td>
+        <td>Memory usage (%)</td>
+    </tr>
+
+{}
+
+</table>
+
+<i>The table is a snapshot of the usage of the top {} users right now and may not be completely accurate.</i>

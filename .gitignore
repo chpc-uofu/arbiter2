@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Vim Stuff
+*.swp
+*.swo
+
+# Git stuff
+*.bundle
+
+# Mac stuff
+*.DS_Store
+
+# Arbiter specific
+logs/
+*.db
+*.exitfile
