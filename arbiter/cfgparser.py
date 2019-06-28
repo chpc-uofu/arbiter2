@@ -64,7 +64,7 @@ shared = Configuration({
     "statusdb_name": "statuses.db",
     "status_tablename": "status",
     "badness_tablename": "badness",
-    "logdb_name": "logdb.db",
+    "logdb_name": "log.{}.db",
     "debuglog_prefix": "debug",
     "servicelog_prefix": "log",
     "log_datefmt": "%Y-%m-%d"
