@@ -16,10 +16,11 @@ _Tip: Make your partial/overriding configurations start with a underscore to bet
 
 ### Special values
 Adding the following to a string will replace the value with the defined value below.
-Name | Special Value | Replacement
---- | --- | ---
-Hostname | `%H` | _replaced with the machine's hostname._
-Environment Varaibles | `${VAR}` | _replaced with the $VAR enviroment variable or a blank space if no such variable exists_
+
+| Name | Special Value | Replacement |
+| --- | --- | --- |
+| Hostname | `%H` | _replaced with the machine's hostname._ |
+| Environment Varaibles | `${VAR}` | _replaced with the $VAR enviroment variable or a blank space if no such variable exists_ |
 
 ### Testing the configuration
 Inside of `tools/`, there is a file called `cfgparser.py`. This is a python program that you can use to test if your configuration is valid or to print out the resulting configuration with the `-p` flag. The tests run are the tests used when Arbiter2 starts up, so failing any one of these tests (including pedantic ones) implies that the resulting configuration might not work when running Arbiter2. There are a couple pedantic tests that check for directories, folders and even ping the mail server, but these can be skipped with the `--non-pedantic` flag (useful if you are testing the configuration on a different machine than the one you are deploying to). Run `cfgparser.py --help` inside of tools to see all the options.
