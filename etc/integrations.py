@@ -187,8 +187,8 @@ def overall_high_usage_body(hostname, iso_timestamp, total_cores,
         """).format(
             username,
             realname,
-            user.history[0]["cpu"] if user.history else 0.0,
-            user.history[0]["mem"] if user.history else 0.0
+            user.cpu_usage,
+            user.mem_usage
         )
     return message.format(
         hostname,

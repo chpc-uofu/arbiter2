@@ -13,7 +13,23 @@ __pycache__/
 # Mac stuff
 *.DS_Store
 
+# Remote Sync Stuff
+*.remote-sync.json
+
+# Geany's Project
+.project
+.geanywb
+
+# Visual Studio Code
+.vscode
+*.code-workspace
+
+smtplib
+*.project
+
+# SQLite3 databases
+*.db
+
 # Arbiter specific
 logs/
-*.db
 *.exitfile

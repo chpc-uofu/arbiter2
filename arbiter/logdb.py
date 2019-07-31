@@ -73,8 +73,7 @@ def create_log_database(filename, schema, names):
     return os.path.isfile(os.path.expanduser(filename))
 
 
-def add_action(action, user, historic_events, historic_badness, timestamp,
-               filename):
+def add_action(action, user, historic_events, timestamp, filename):
     """
     Adds an action to the logging database.
 
@@ -84,10 +83,10 @@ def add_action(action, user, historic_events, historic_badness, timestamp,
         The user associated with the action.
     historic_events: collections.deque
         The historic (general) usage of the user (see triggers.py).
-    historic_badness: collections.deque
-        The historic badness of the user (see triggers.py).
     timestamp: int
         The time (epoch) at which the action was taken.
+    filename: str
+        The name of the logdb file to write out to.
     """
     action_obj = Action(action, user, timestamp)
     for event in historic_events:

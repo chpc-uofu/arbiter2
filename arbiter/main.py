@@ -9,11 +9,13 @@ import os
 import subprocess
 import sys
 import time
+import collections
 import logging
 import permissions
 from collector import Collector, TimeRecorder
 from cfgparser import cfg, shared
 import cinfo
+import usage
 import statuses
 import high_usage_watcher
 import actions
@@ -45,6 +47,9 @@ def run(args):
 
     # Get all the old badness scores (made up of different metrics in a dict)
     db_badness = statuses.read_badness()
+    allusers_hist = collections.deque(maxlen=cfg.high_usage_watcher.threshold_period)
+    for _ in range(cfg.high_usage_watcher.threshold_period):
+        allusers_hist.appendleft(usage.metrics.copy())
     high_usage_timer = TimeRecorder()
 
     # Record last update to exit file
@@ -54,7 +59,8 @@ def run(args):
 
     # Analyze the information that has been collected
     while True:
-        users = collector.run()
+        allusers, users = collector.run()
+        allusers_hist.appendleft(allusers)
 
         if exit_file_updated(args.exit_file, last_exit_file_update):
             exit_time = os.path.getctime(args.exit_file)
@@ -114,8 +120,8 @@ def run(args):
         # check if there is high usage on the node and send email if applicable
         if (cfg.high_usage_watcher.high_usage_watcher
                 and high_usage_timer.delta <= 0
-                and high_usage_watcher.is_high_usage(users)):
-            send_high_usage_email(users)
+                and high_usage_watcher.is_high_usage(allusers_hist)):
+            high_usage_watcher.send_high_usage_email(allusers, users)
             high_usage_timer.start(cfg.high_usage_watcher.timeout)
 
 
@@ -175,22 +181,6 @@ def mostly_eq(lvalue, rvalue, fudge=0.05):
         The margin of error to account for. i.e. the fudge factor
     """
     return lvalue >= rvalue * (1 - fudge) and lvalue <= rvalue * (1 + fudge)
-
-
-def send_high_usage_email(user_dict):
-    """
-    Sends a email about high usage on the machine.
-
-    user_dict: {}
-        A dictionary of users organized by their uid and containing a User obj.
-        Usage is pulled from the users.
-    """
-    total_cpu, total_mem = high_usage_watcher.get_usage_totals(user_dict)
-    top_users = high_usage_watcher.get_high_usage_users(user_dict)
-
-    logger.info("Sending an overall high usage email")
-    actions.send_high_usage_email(top_users, total_cpu, total_mem,
-                                  cfg.email.admin_emails, cfg.email.from_email)
 
 
 def valid_db_badness(uid, db_badness):

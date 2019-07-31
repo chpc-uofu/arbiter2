@@ -10,6 +10,7 @@ import logging
 import re
 import time
 import pathlib
+import pwd
 import glob
 import usage
 
@@ -242,10 +243,10 @@ class SystemdCGroup(StaticSystemdCGroup):
         [549135244092, 1150535824026, 412981314604, 1081336776345]
         """
         prop = "cpuacct.usage_percpu"
-        with open(self.controller_path("cpuacct", prop)) as usage:
-            return list(map(int, usage.readline().split()))
+        with open(self.controller_path("cpuacct", prop)) as cpuacct:
+            return list(map(int, cpuacct.readline().split()))
 
-    def mem_usage(self, memsw=True):
+    def mem_usage(self, memsw=True, kmem=False):
         """
         Gets the memory utilization as a proportion of the system's total
         memory or in bytes. If memsw is True, the swap usage is added into the
@@ -253,13 +254,23 @@ class SystemdCGroup(StaticSystemdCGroup):
 
         memsw: bool
             Whether or not to use memsw for calculating memory usage.
+        kmem: bool
+            Whether to include kernel memory.
 
         >>> self.mem_usage()
         40
         """
-        filename = "memory{}.usage_in_bytes".format(".memsw" if memsw else "")
-        with open(self.controller_path("memory", filename)) as usage:
-            return int(usage.read().strip())
+        filename = "memory{}.usage_in_bytes"
+        usage_in_bytes = filename.format(".memsw" if memsw else "")
+        mem_usage = 0
+        with open(self.controller_path("memory", usage_in_bytes)) as memfile:
+            mem_usage = int(memfile.read().strip())
+
+        if not kmem:
+            kmem_usage_in_bytes = filename.format(".kmem")
+            with open(self.controller_path("memory", kmem_usage_in_bytes)) as memfile:
+                mem_usage -= int(memfile.read().strip())
+        return mem_usage
 
     def pids(self):
         """
@@ -456,15 +467,21 @@ class UserSliceInstance(UserSlice):
     def __truediv__(self, other):
         """
         Averages two UserSliceInstances together into a human readable
-        StaticUserSlice.
+        StaticUserSlice. The divisor instance should come later in time than
+        the dividend (older / newer).
         """
         if isinstance(other, type(self)):
-            return StaticUserSlice(
-                self.uid,
-                _pids=list(set(self._pids + other._pids)),
-                usage={
+            # If a user logs in and out between collection of instances, the
+            # instances will have drastically different cpu and memory data,
+            # leading to erroneous results. To get around this, we zero out
+            # usage if the cputime (which is cumulative) of the first is
+            # greater than the second.
+            if self.cputime > other.cputime:
+                calc_usage = usage.metrics.copy()  # Zero out the usage
+            else:
+                calc_usage = {
                     "cpu": (
-                        abs(other.cputime - self.cputime) /
+                        max(other.cputime - self.cputime, 0) /
                         abs(other.time - self.time) / 1E7
                     ),
                     "mem": (
@@ -472,6 +489,10 @@ class UserSliceInstance(UserSlice):
                         / total_mem * 100
                     )
                 }
+            return StaticUserSlice(
+                self.uid,
+                _pids=list(set(self._pids + other._pids)),
+                usage=calc_usage
             )
         return super().__truediv__(other)
 
@@ -488,16 +509,20 @@ def wait_till_uids(min_uid=0):
     return uids
 
 
-def current_cgroup_uids():
+def current_cgroup_uids(controller="memory"):
     """
     Returns a list of str uids that are active in the user.slice cgroup.
+
+    controller: str
+        Which cgroup controller to pull from. (Assumes that accounting is
+        enabled for the controller)
 
     >>> current_cgroup_uids()
     [1000, 1001, 1003]
     """
     uids = []
     # Loop through names and remove the "user-" and ".slice" part
-    for name in current_cgroups():
+    for name in current_cgroups(controller=controller):
         uid = re.findall(r"-(\d+)", name)
         uids.extend(list(map(int, uid)))
     return uids
@@ -538,3 +563,14 @@ def total_clockticks():
         stat_values = list(map(int, stat.readline()[5:].split(" ")))
         # Sum up the user kernel and guest time
         return sum(stat_values)
+
+
+def passwd_entry(uid):
+    """
+    Returns whether the user can be looked up via passwd.
+    """
+    try:
+        pwd.getpwuid(uid)
+        return True
+    except KeyError as e:
+        return False

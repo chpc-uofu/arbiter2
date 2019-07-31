@@ -98,6 +98,10 @@ time_to_min_bad_with_usage = 100 / badness_change_per_interval
 
 - The time in seconds before badness scores cannot be imported after scores are written out. (Arbiter2 stores badness scores in the status database (more below) in case of failure/restart. If Arbiter2 fails, or is restart, it imports badness scores from this database)
 
+**cap_badness_incr** _(optional/defaulted: true)_: `boolean`
+
+- Whether or not to cap the badness increase per interval to the badness increase at the user's quota. This prevents erroneous data from causing badness scores from skyrocket.
+
 ## Email `[email]`
 
 **email_domain**: `string`
@@ -160,7 +164,7 @@ _Note: the database header must still exist in the toml file, even if all the va
 
 **whitelist** _(optional/defaulted: [])_: `string`
 
-- A list of whitelisted process names. Each item in the whitelist is directly compared to the name of the command run. Basic shell style globbing is allowed e.g. "\*", "?", "[seq]", "[!seq]".
+- A list of whitelisted process names. Each item in the whitelist is directly compared to the name of the command run.
 
 **whitelist_file** _(optional/defaulted: "")_: `string`
 
@@ -194,11 +198,11 @@ A status group can be defined by indenting and creating a new section with the n
 
 **whitelist** _(optional/defaulted: [])_: `list of string`
 
-- A list of whitelisted strings. See whitelist above for details on globbing.
+- A list of whitelisted strings. See whitelist above for details.
 
 **whitelist_file** _(optional/defaulted: "")_: `string`
 
-- The filepath to the whitelist (either relative to `arbiter.py` or an abspath). See whitelist above for more information.
+- The filepath to the whitelist (either relative to `arbiter.py` or an abspath). See whitelist above for details.
 
 **uids** _(optional/defaulted: [])_: `list of int`
 
@@ -264,6 +268,10 @@ Arbiter2 can optionally watch for high usage on the machine (warning if usage ex
 **div_cpu_thresholds_by_threads_per_core**: _(optional/defaulted: false)_: `boolean`
 
 - Whether or not to divide the `cpu_usage_threshold` by the threads per core. i.e. the usage threshold allowed is relative to physical cores, rather than virtual(hyperthreaded) cores/threads.
+
+**threshold_period** _(optional/defaulted: 1)_: `int` (greater or equal to 1)
+
+- How many arbiter refresh intervals that the usage must be above the thresholds before a warning is triggered.
 
 **user_count** _(optional/defaulted: 8)_: `int`
 

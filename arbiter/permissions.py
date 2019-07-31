@@ -1,5 +1,6 @@
 import subprocess
 import logging
+import time
 import cinfo
 import os
 
@@ -16,8 +17,7 @@ memsw_write_files = [
 
 def has_cgroup_permissions(uid, memsw=True):
     """
-    Returns whether arbiter has permissions to write to cgroup files. May
-    throw FileNotFoundError if the user disappears.
+    Returns whether arbiter has permissions to write to cgroup files.
 
     uid: int
         The uid of the user.
@@ -61,20 +61,53 @@ def check_permissions(sudo_permissions, cfg):
             "/proc/<pid>/smaps (requires root or CAP_SYS_PTRACE "
             "capabilities) with pss = true"
         )
-        sufficient = False
+        sufficient &= False
 
     # Skip cgroup permission tests if in debug mode (no limiting)
     if cfg.general.debug_mode:
         return sufficient
 
+    # Wait until there are users in the cgroup hierarchy (we'll check a user)
+    uids = []
+    attempts = 0
+    while not uids and attempts < 5:
+        uids = [
+            uid for uid in cinfo.wait_till_uids(min_uid=cfg.general.min_uid)
+            # Users without passwd entry aren't in cgroup hierarchy, causing
+            # permission checks to erroneously fail
+            if cinfo.passwd_entry(uid)
+        ]
+        # Users may disappear while checking permissions, repeat for online
+        # users until we find one that doesn't disappear on us.
+        for uid in uids:
+            try:
+                sufficient &= check_permissions_with(uid, sudo_permissions, cfg)
+                return sufficient
+            except FileNotFoundError:
+                logger.debug("Failed to check permissions on %s due to the "
+                             "user disappearing. Trying another active user.",
+                             uid)
+                continue
+        time.sleep(0.5)
+        attempts += 1
+
+
+def check_permissions_with(uid, sudo_permissions, cfg):
+    """
+    Attempts to check permission checks using a specific uid. If the user
+    disappears during the checks, a FileNotFoundError is thrown.
+
+    uid: int
+        The uid of a user.
+    """
     groupname = cfg.self.groupname
     memsw = cfg.processes.memsw
-    # Wait until there are users in the cgroup hierarchy (we'll check a user)
-    uids = cinfo.wait_till_uids(min_uid=cfg.general.min_uid)
+    user_slice = cinfo.UserSlice(uid)
     # Check if can write to required files
     if sudo_permissions:
         try:
-            set_file_permissions(uids[0], groupname, memsw)
+            # Raises FileNotFoundError if disappears
+            set_file_permissions(uid, groupname, memsw)
         except subprocess.CalledProcessError as err:
             startup_logger.error(err)
             startup_logger.error(
@@ -82,13 +115,16 @@ def check_permissions(sudo_permissions, cfg):
                 "requisite sudo calls for changing permissions on cgroups. "
                 "See the sudoers file."
             )
-            sufficient = False
+            return False
     elif not has_cgroup_permissions(uids[0], memsw):
+        # Raises FileNotFoundError if disappears, voids has_cgroup_permissions()
+        user_slice.controller_path()
         # Don't include memsw files if turned off
         files = req_write_files + (memsw_write_files if memsw else [])
         startup_logger.error("Failed to set permissions on one of %s", files)
-        sufficient = False
-    return sufficient
+        return False
+    return True
+
 
 
 def turn_on_cgroups_acct(inactive_uid):
@@ -131,7 +167,9 @@ def set_file_permissions(uid, groupname, memsw=True):
     """
     Runs commands to set the correct group and permissions on files requiring
     write access by the service account. The commands must be present in the
-    /etc/sudoers file to prevent errors.
+    /etc/sudoers file to prevent errors. Will throw
+    subprocess.CalledProcessError if the call fails due or FileNotFoundError
+    if the user disappears.
 
     uid: str, int
         The uid of the user to set file permissions of.
@@ -142,12 +180,14 @@ def set_file_permissions(uid, groupname, memsw=True):
     """
     # Don't include memsw files if turned off
     to_set = req_write_files + (memsw_write_files if memsw else [])
+    user_slice = cinfo.UserSlice(uid)
     for controller, filename in to_set:
+        # Raise FileNotFoundError if the user disappears
+        user_slice.controller_path(controller=controller)
         path = base_path.format(controller, uid, filename)
-        if not os.path.exists(path):
-            continue  # No point trying to set limits on a nonexistent path
         chgrp = "sudo /bin/chgrp {} {}".format(groupname, path)
         subprocess.check_call(chgrp.split())
+        user_slice.controller_path(controller=controller)
         chmod = "sudo /bin/chmod {} {}".format("g+w", path)
         subprocess.check_call(chmod.split())
 

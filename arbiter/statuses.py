@@ -142,11 +142,11 @@ def read_status(status_config=default_config):
     table = database.read_table(status_config.status_loc,
                                 status_config.status_table)
     for row in table:
-        # Get the statuses out into a dictionary from where the uid is the key
         uid = row.pop("uid")
         status_dict[uid] = Status(
             **{statusdb_key_map[k]: v for k, v in row.items()}
         )
+        status_dict[uid] = enforce_cfg_db_consistency(uid, status_dict[uid])
     return status_dict
 
 
@@ -160,7 +160,7 @@ def get_status(uid, status_config=default_config):
     status group as the current and default, plus 0 occurrences, 0 and 0 for
     both timestamps.
 
-    uid: str
+    uid: int, str
         The user's uid.
 
     >>> get_status("1001")
@@ -176,12 +176,40 @@ def get_status(uid, status_config=default_config):
     try:
         result, _ = database.execute_command(status_config.status_loc,
                                              get_default_property, int(uid))
-        # Get the first row returned and everything inside of it (except for
-        # the uid which is first)
-        return Status(*result[0][1:])
-    except IndexError:
+        return enforce_cfg_db_consistency(uid, Status(*result[0][1:]))
+    except (IndexError, KeyError):
         default_status = lookup_default_status_group(uid)
         return Status(default_status, default_status, 0, 0, 0)
+
+
+def enforce_cfg_db_consistency(uid, status):
+    """
+    Ensures that the given Status()'s default and current status is consistent
+    with the user's configured status groups. If both the current and default
+    statuses are the same and inconsistent, both statuses will be changed to
+    the configured values. Otherwise, only the default status will be changed.
+    The resulting status will be returned. This is meant to be called on
+    statuses coming from the status database.
+
+    The motivation for this is that occasionally the configuration is changed,
+    but a user has a entry in statusdb with their old status (thus, the user's
+    correct status couldn't be applied). This function enforces that the
+    configuration is the ultimate source for determining a user's default
+    status (note it is not the source for the current status).
+
+    uid: int
+        The user's uid.
+    status: Status()
+        The status to enforce consistency on.
+    """
+    default_status = lookup_default_status_group(uid)
+    if status.default != default_status:
+        current_status = status.current
+        if status.current == status.default:
+            current_status = default_status
+        status = Status(default_status, current_status, status.occurrences,
+                        status.timestamp, status.occur_timestamp)
+    return status
 
 
 @decorators.retry((database.OperationalError), logger)

@@ -706,7 +706,7 @@ def generate_table(sorted_events, cpu_quota, mem_quota_gb):
     return table + "</table>"
 
 
-def combine_processes(*processes):
+def combine_processes(processes):
     """
     Combines the given processes together into new StaticProcess()s if they
     have the same name. Returns a iterable of processes.
@@ -730,13 +730,10 @@ def add_process_count(events):
         A dictionary of lists of StaticProcess()s, indexed by their event
         timestamp.
     """
-    combined_processes = [
-        combine_processes(*processes) for processes in events.values()
-    ]
-
     # Get max and min
-    process_extrema = collections.defaultdict(lambda: (1, 1))
-    for processes in combined_processes:
+    inf = float("inf")
+    process_extrema = collections.defaultdict(lambda: (inf, -inf))
+    for processes in map(combine_processes, events.values()):
         for process in processes:
             min_count, max_count = process_extrema[process.name]
             process_extrema[process.name] = (

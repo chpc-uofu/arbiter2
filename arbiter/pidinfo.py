@@ -1,12 +1,9 @@
 import os
 import errno
-import fnmatch
 import math
 import re
-from cfgparser import cfg, shared
 import cinfo
 import usage
-import statuses
 
 """
 A simple module containing classes and methods for managing and storing
@@ -81,25 +78,6 @@ class StaticProcess(usage.Usage):
             new.count = self.count // other
             return new
         return super().__floordiv__(other)
-
-    def is_whitelisted(self, status):
-        """
-        Returns whether the process is whitelisted.
-
-        status: str
-            The name of the status to get the status whitelist from.
-        """
-        status_group_prop = statuses.lookup_status_prop(status)
-        whitelist = []
-        whitelist_file = cfg.processes.whitelist_file
-        if whitelist_file:  # If whitelist file is blank
-            with open(whitelist_file, "r") as wfile:
-                whitelist = [item.strip() for item in wfile.readlines()]
-        whitelist += cfg.processes.whitelist
-        whitelist += status_group_prop.whitelist
-        if cfg.processes.whitelist_other_processes:
-            whitelist.append(shared.other_processes_label)
-        return any(fnmatch.fnmatch(self.name.rstrip("*"), i) for i in whitelist)
 
 
 class Process(StaticProcess):
@@ -291,17 +269,22 @@ class ProcessInstance(Process):
     def __truediv__(self, other):
         """
         Averages two ProcessInstances together into a human readable
-        StaticProcess.
+        StaticProcess. The divisor instance should come later in time than
+        the dividend (older / newer).
         """
         if isinstance(other, type(self)):
-            return StaticProcess(
-                pid=self.pid,
-                name=self.name,
-                uptime=max(self.uptime, other.uptime),
-                owner=self.owner,
-                usage={
+            # If a pid is reassigned between collection of instances, the
+            # instances will have drastically different cpu and memory data,
+            # leading to erroneous results. To get around this, we zero out
+            # usage if the cputime (which is cumulative) of the first is
+            # greater than the second, as well as if the process names are not
+            # the same.
+            if self.cputime > other.cputime or self.name != other.name:
+                calc_usage = usage.metrics.copy()  # Zero out the usage
+            else:
+                calc_usage = {
                     "cpu": max(
-                        abs(other.cputime - self.cputime) /
+                        max(other.cputime - self.cputime, 0) /
                         max(abs(other.clockticks - self.clockticks), 1) *
                         os.cpu_count(), 0) * 100,
                     "mem": (
@@ -309,5 +292,11 @@ class ProcessInstance(Process):
                         / cinfo.total_mem
                     ) * 100
                 }
+            return StaticProcess(
+                pid=self.pid,
+                name=self.name,
+                uptime=max(self.uptime, other.uptime),
+                owner=self.owner,
+                usage=calc_usage
             )
         return super().__truediv__(other)

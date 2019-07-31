@@ -37,7 +37,7 @@ class Usage(object):
         """
         Initializes a Usage object.
         """
-        self.usage = metrics
+        self.usage = metrics.copy()
         for key, value in kwargs.items():
             setattr(self, key, value)
 

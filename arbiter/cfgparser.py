@@ -239,6 +239,19 @@ has_memsw = Validate(
     "on memsw",
     pedantic=True
 )
+cpu_period_us = 100000  # default for linux
+valid_cpu_limit = Warn(
+    # FIXME: Writing out the max long size in cpuacct.cfg_quota_us gives us
+    #        18446744073709550 for some reason. The kernel code uses a int64
+    #        to store the value, so I dunno why it's capped at this.
+    lambda cpusize: cpusize * cpu_period_us <= 2**64-1,
+    "* default_cpu_period_us > LLONG_MAX. The cgroup CPU limit may not be "
+    "applied (depends on cfs_period_us)"
+)
+valid_mem_limit = Warn(
+    lambda memsize: memsize * 1073742000 <= 2**64-1,  # kernel uses int64
+    "* bytes_in_gb > LLONG_MAX. The cgroup memory limit cannot be applied."
+)
 
 
 # Stores the validation protocols and layout of the base configuration.
@@ -259,6 +272,7 @@ base_validation_config = {
         "mem_badness_threshold": ValidationProtocol((float, int), isbeloweq1),
         "time_to_max_bad": ValidationProtocol(int),
         "time_to_min_bad": ValidationProtocol(int),
+        "cap_badness_incr": ValidationProtocol(bool, default_value=True),
         "imported_badness_timeout": ValidationProtocol(int, default_value=3600)
     },
     "email": {
@@ -323,13 +337,18 @@ base_validation_config = {
             bool,
             default_value=False
         ),
+        "threshold_period": ValidationProtocol(
+            int,
+            isaboveeq1,
+            default_value=1
+        ),
         "timeout": ValidationProtocol(int)
     },
 }
 # Stores the validation protocols and layout of a status config
 status_validation = {
-    "cpu_quota": ValidationProtocol((int, float)),
-    "mem_quota": ValidationProtocol((int, float)),
+    "cpu_quota": ValidationProtocol((int, float), valid_cpu_limit),
+    "mem_quota": ValidationProtocol((int, float), valid_mem_limit),
     "whitelist": ValidationProtocol(list, all_are_str, default_value=[]),
     "whitelist_file": ValidationProtocol(str, file_exists, default_value=""),
     "uids": ValidationProtocol(

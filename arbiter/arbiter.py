@@ -198,14 +198,25 @@ def pre_run(args):
     # Turn on accounting
     if args.acct_uid:
         startup_logger.info("Attempting to turn on accounting...")
-        if not permissions.turn_on_cgroups_acct(args.acct_uid):
+        try:
+            success = permissions.turn_on_cgroups_acct(args.acct_uid)
+        except FileNotFoundError as err:
+            logger.debug(err)
+            success = False
+        if not success:
             startup_logger.error("Failed to turn on accounting. Exiting.")
             sys.exit(2)
 
     # Make sure cgroup hierarchy already exists
     else:
         controllers = ("cpu", "memory")
-        new_slice = cinfo.UserSlice(cinfo.wait_till_uids()[0])
+        uids = []
+        while not uids:
+            uids = [
+                uid for uid in cinfo.wait_till_uids()
+                if cinfo.passwd_entry(uid)   # No passwd entry -> not in hierarchy
+            ]
+        new_slice = cinfo.UserSlice(uids[0])
         if not all(map(new_slice.controller_exists, controllers)):
             startup_logger.error("cgroup hierarchy doesn't exist (it can be "
                                  "turned on via the -a flag). Exiting.")

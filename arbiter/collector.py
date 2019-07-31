@@ -39,6 +39,7 @@ class Collector(object):
         self.poll = poll if poll >= 2 else 2
         self.interval = interval
         self.users = {}
+        self.allusers = usage.metrics.copy()
         self.rhel7_compat = rhel7_compat
 
     def delete_user(self, uid):
@@ -59,8 +60,18 @@ class Collector(object):
         active_uids = cinfo.current_cgroup_uids()
         self.users.update(
             {uid: user.User(uid) for uid in active_uids
-             if uid >= cfg.general.min_uid and uid not in self.users}
+             if uid >= cfg.general.min_uid
+             # Not sure why, but sometimes there are users without a passwd
+             # entry, which causes things to fail, ignore them here.
+             and cinfo.passwd_entry(uid)
+             and uid not in self.users}
         )
+
+    def _pre_run(self):
+        """
+        Initializes allusers to be empty.
+        """
+        self.allusers = usage.metrics.copy()
 
     def _pre_collect(self):
         """
@@ -69,6 +80,17 @@ class Collector(object):
         starttime = int(time.time())
         for user_obj in self.users.values():
             user_obj.history.appendleft({"time": starttime})
+
+    def _post_run(self):
+        """
+        Computes the total usage from the sum of user cpu and memory.
+        """
+        self.allusers["cpu"] = sum(
+            user_obj.cpu_usage for user_obj in self.users.values()
+        )
+        self.allusers["mem"] = sum(
+            user_obj.mem_usage for user_obj in self.users.values()
+        )
 
     def _post_collect(self):
         """
@@ -148,15 +170,14 @@ class Collector(object):
             div_by = self.poll - 1
             # Average UserSliceInstance() into StaticUserSlice()
             if len(gen_instant_histories[user_obj]) >= 2:
-                user_obj.history[0].update(
-                    usage.average(
-                        *usage.combine(*gen_instant_histories[user_obj]),
-                        by=div_by
-                    ).usage
+                userslice = usage.average(
+                    *usage.combine(*gen_instant_histories[user_obj]),
+                    by=div_by
                 )
+                user_obj.history[0].update(userslice.usage)
             else:
                 # Cannot avg a single instantaneous user slice
-                user_obj.history[0].update(usage.metrics)  # empty metrics
+                user_obj.history[0].update(usage.metrics.copy())  # empty metrics
 
             # Average ProcessInstance() into StaticProcess()
             user_obj.history[0]["pids"] = {
@@ -172,17 +193,21 @@ class Collector(object):
     def run(self):
         """
         Runs the collector self.repetitions times, with each collection over
-        the self.interval. Returns a dictionary of users identified by their
-        uid.
+        the self.interval. Returns a StaticUserSlice that is the sum of all
+        the users and a dictionary of users identified by their uid.
         """
         self.refresh_users()
+        self._pre_run()
+
         for _ in range(self.repetitions):
             self.collect()
 
         # Add properties like looking up statuses, quotas, etc...
         for uid, user_obj in self.users.items():
             user_obj.update_properties()
-        return self.users
+
+        self._post_run()
+        return self.allusers, self.users
 
 
 class TimeRecorder(object):

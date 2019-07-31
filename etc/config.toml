@@ -53,8 +53,12 @@ div_cpu_quotas_by_threads_per_core = true
   whitelist = ['bash', 'python', 'python3']
 
   [status.invincible]
-  cpu_quota = 1e10
-  mem_quota = 1e10   # Gigabyte
+  # If arbiter2.service has Slice=user-$ARBUID.slice (for turning on cgroups acct),
+  # arbiter will be automatically tracked. You can tell arbiter to effectively
+  # ignore itself by making itself invincible here.
+  # uids = [$ARBUID]
+  cpu_quota = 1e5
+  mem_quota = 1e5   # Gigabyte
 
   [status.penalty]
   relative_quotas = true  # Note the relative_quotas, makes the *_quota less than 1

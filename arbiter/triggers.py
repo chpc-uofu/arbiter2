@@ -4,10 +4,7 @@ are "triggered"). These triggers, and the action calls are defined in
 evaluate(). This method is called every arbiter interval for each active user.
 
 For calculations of badness, calc_badness() calculates a user.User()'s delta
-badness score. See _default_calc_badness() for an example of how this is done.
-
-Other functions below, such as whitelisted_usage() are helper functions for
-evaluating whether actions should be made.
+badness score.
 """
 
 import logging
@@ -63,9 +60,10 @@ def evaluate(user_obj):
             logger.debug("%s has nonzero badness: %s", uid, badness)
             service_logger.info("User %s has nonzero badness: %s", username,
                                 badness_score)
-            whitelist_usage = whitelisted_usage(user_obj)
+            whlist_cpu_usage, whlist_mem_usage = user_obj.avg_proc_usage(whitelisted=True)
             # Print out whitelisted usage vs normal usage for debugging
-            logger.debug("Whitelisted Usage: %s", whitelist_usage)
+            logger.debug("Whitelisted Usage: cpu %s, mem %s",
+                         whlist_cpu_usage, whlist_mem_usage)
             logger.debug("Real Usage: %s", {
                 "cpu": user_obj.cpu_usage,
                 "mem": user_obj.mem_usage
@@ -125,7 +123,7 @@ def _upgrade_penalty(user_obj):
         cfg.database.log_rotate_period,
         shared.log_datefmt
     )
-    logdb.add_action(new_status, user_obj.uid, user_obj.history, user_obj.badness_history,
+    logdb.add_action(new_status, user_obj.uid, user_obj.history,
                      int(time.time()), rotated_filename)
 
     actions.user_warning_email(user_obj, new_status)
@@ -146,19 +144,16 @@ def calc_badness(user_obj):
     refresh = cfg.general.arbiter_refresh
     time_to_max_bad = cfg.badness.time_to_max_bad
     time_to_min_bad = cfg.badness.time_to_min_bad
-
-    # Get memory and CPU quotas
-    # Converts to percentages
     mem_quota = user_obj.mem_quota
     cpu_quota = user_obj.cpu_quota
 
-    # get the cpu usage minus the whitelisted usage as a percent of the quota
-    whitelist_usage = whitelisted_usage(user_obj)
+    whlist_cpu_usage, whlist_mem_usage = user_obj.avg_proc_usage(whitelisted=True)
+    # Only subtract whlist_cpu_usage, since too much memory usage is still
+    # bad, regardless of whether it's whitelisted (it cannot be throttled once
+    # allocated).
     bad_mem = user_obj.mem_usage
-    bad_cpu = user_obj.cpu_usage - whitelist_usage["cpu"]
+    bad_cpu = user_obj.cpu_usage - whlist_cpu_usage
 
-    # get the change in badness and imit the rate of decrease in case the usage
-    # is low
     Metric = collections.namedtuple("Metric", "quota usage threshold")
     metrics = {
         "mem": Metric(mem_quota, bad_mem, cfg.badness.mem_badness_threshold),
@@ -174,8 +169,9 @@ def calc_badness(user_obj):
         max_decr_per_interval = max_decr_per_sec * refresh
 
         usage = metric.usage
-        # Make badness scores consistent between debug and non-debug mode
-        if cfg.general.debug_mode:
+        # Make badness scores consistent between debug and non-debug mode or
+        # Optionally cap the badness increase by capping the usage
+        if cfg.general.debug_mode or cfg.badness.cap_badness_incr:
             usage = min(metric.usage, metric.quota)
 
         rel_usage = usage / metric.quota
@@ -186,22 +182,3 @@ def calc_badness(user_obj):
         new_delta_badness[name] = change
     return new_delta_badness
 
-
-def whitelisted_usage(user_obj):
-    """
-    Returns a dictionary of the cumulative memory and cpu usage of whitelisted
-    processes of the user.
-
-    user_obj: user.User()
-        A user to calculate the whitelisted usage of.
-
-    >>> whitelisted_usage()
-    {"cpu": 50.0, "mem": 75.0}
-    """
-    whitelisted_procs = user_obj.whitelisted_processes(
-        user_obj.history[0]["pids"].values()
-    )
-    return {
-        "cpu": sum(pid.usage["cpu"] for pid in whitelisted_procs),
-        "mem": sum(pid.usage["mem"] for pid in whitelisted_procs)
-    }
