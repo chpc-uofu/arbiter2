@@ -32,4 +32,6 @@ smtplib
 
 # Arbiter specific
 logs/
+# (ignore etc/sitename/)
+etc/*/*
 *.exitfile
