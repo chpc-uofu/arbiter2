@@ -3,7 +3,6 @@ A module with utilities for storing information related to a specific user.
 """
 
 import time
-import functools
 import collections
 import logging
 import itertools
@@ -15,8 +14,35 @@ from cfgparser import cfg, shared
 
 logger = logging.getLogger("arbiter." + __name__)
 
+def get_whitelist(status_group):
+    """
+    Returns the whitelist for the status group plus the global whitelist as a
+    set.
+    """
+    status_group_prop = statuses.lookup_status_prop(status_group)
+    whlist = set(cfg.processes.whitelist)
+    whlist.update(status_group_prop.whitelist)
 
-class User(object):
+    if cfg.processes.whitelist_other_processes:
+        whlist.add(shared.other_processes_label)
+
+    whlist_files = [
+        cfg.processes.whitelist_file, status_group_prop.whitelist_file
+    ]
+    for wfile in whlist_files:
+        if wfile and os.path.isfile(wfile):
+            with open(wfile, "r") as f:
+                whlist.update(item.strip() for item in f.readlines())
+    return whlist
+
+
+proc_owner_whitelist = set(cfg.processes.proc_owner_whitelist)
+whitelist = {}
+for status_group in cfg.status.order + cfg.status.penalty.order:
+    whitelist[status_group] = get_whitelist(status_group)
+
+
+class User:
     """
     Contains information related to an user.
 
@@ -59,12 +85,10 @@ class User(object):
     mem_quota: float
         The user's memory quota (as a percentage of the entire machine) based
         on their current status.
-    whitelist: list
-        A list of whitelisted process names.
     """
     __slots__ = ["uid", "gids", "cgroup", "history", "badness_history",
                  "badness_timestamp", "status", "cpu_usage", "mem_usage",
-                 "cpu_quota", "mem_quota", "whitelist"]
+                 "cpu_quota", "mem_quota"]
 
     def __init__(self, uid):
         """
@@ -75,12 +99,8 @@ class User(object):
         """
         self.uid = uid
         self.gids = statuses.query_gids(self.uid)
-        self.cgroup = cinfo.UserSlice(
-            self.uid,
-            memsw=cfg.processes.memsw
-        )
+        self.cgroup = cinfo.UserSlice(self.uid)
         self.status = statuses.get_status(uid)
-        self.whitelist = self.get_whitelist()
         self.history = collections.deque(maxlen=cfg.badness.max_history_kept)
         self.badness_history = collections.deque(maxlen=cfg.badness.max_history_kept)
         self.badness_timestamp = 0  # epoch when badness started increasing
@@ -132,18 +152,7 @@ class User(object):
         """
         Sets properties of the user.
         """
-        old_curr_status = self.status.current
         self.status = statuses.get_status(self.uid)
-
-        # Don't want to refresh whitelist unless we have to
-        if self.status.current != old_curr_status:
-            self.whitelist = self.get_whitelist()
-            # This will clear the cache for everyone, since
-            # @functools.lru_cache is global (the self arg effectively creates
-            # a per-user cache inside the global cache). That's okay since its
-            # not super common to change status (put in penalty).
-            self._in_whitelist.cache_clear()
-        # Average cpu and mem usage over the arbiter interval
         avg_cpu, avg_mem = self.avg_gen_usage()
         self.cpu_usage = avg_cpu
         self.mem_usage = avg_mem
@@ -151,26 +160,6 @@ class User(object):
         self.cpu_quota = cpu_quota
         self.mem_quota = mem_quota
         self.gids = statuses.query_gids(self.uid)
-
-    def get_whitelist(self):
-        """
-        Returns the whitelist as a set (including status specific whitelists).
-        """
-        status_group_prop = statuses.lookup_status_prop(self.status.current)
-        whitelist = cfg.processes.whitelist
-        whitelist += status_group_prop.whitelist
-
-        if cfg.processes.whitelist_other_processes:
-            whitelist.append(shared.other_processes_label)
-
-        whitelist_files = [
-            cfg.processes.whitelist_file, status_group_prop.whitelist_file
-        ]
-        for wfile in whitelist_files:
-            if wfile and os.path.isfile(wfile):
-                with open(wfile, "r") as f:
-                    whitelist.extend([item.strip() for item in f.readlines()])
-        return set(whitelist)
 
     def whitelisted_processes(self, processes):
         """
@@ -181,21 +170,9 @@ class User(object):
         """
         return [
             proc for proc in processes
-            if self._in_whitelist(proc.name.rstrip("*"))
+            if proc.name.rstrip("*") in whitelist[self.status.current] or
+               proc.owner in proc_owner_whitelist
         ]
-
-    # Cache is global, but the self arg makes it User() obj based
-    @functools.lru_cache(maxsize=2048)
-    def _in_whitelist(self, name):
-        """
-        Returns whether the name is in the whitelist.
-
-        status_group: str
-            The current status group of the user.
-        """
-        # Normally we'd need a status_group arg to keep caches status
-        # dependent, but we invalidate the cache on status change above.
-        return name in self.whitelist
 
     def mark_whitelisted_processes(self, processes):
         """

@@ -39,8 +39,11 @@ class Collector(object):
         self.poll = poll if poll >= 2 else 2
         self.interval = interval
         self.users = {}
-        self.allusers = usage.metrics.copy()
+        self.allusers = cinfo.StaticAllUsersSlice()
+        self.allusers_hist = []
         self.rhel7_compat = rhel7_compat
+        # Keep track of seen no passwd users so we don't spam the debug log
+        self.no_passwd_uids = set()
 
     def delete_user(self, uid):
         """
@@ -57,21 +60,31 @@ class Collector(object):
         Refreshes the internal users dictionary by adding new users that
         haven't been seen before.
         """
-        active_uids = cinfo.current_cgroup_uids()
+        active_uids = cinfo.current_cgroup_uids(min_uid=cfg.general.min_uid)
+
+        # Sometimes there are users with sessions on a machine that aren't in
+        # ldap because they've been removed up there at some point (have no
+        # passwd entry). This causes problems down the line when arbiter tries
+        # to query info about them (e.g. email addr,  username, groupnames,
+        # realname). We'll warn about them once and ignore them.
+        found_no_passwd_uids = set(
+            uid for uid in active_uids if not cinfo.passwd_entry(uid)
+        )
+        for uid in self.no_passwd_uids.symmetric_difference(found_no_passwd_uids):
+            logger.warning("Found a user without a passwd entry, ignoring: %s", uid)
+        self.no_passwd_uids.update(found_no_passwd_uids)
+
         self.users.update(
-            {uid: user.User(uid) for uid in active_uids
-             if uid >= cfg.general.min_uid
-             # Not sure why, but sometimes there are users without a passwd
-             # entry, which causes things to fail, ignore them here.
-             and cinfo.passwd_entry(uid)
-             and uid not in self.users}
+            {uid: user.User(uid)
+             for uid in active_uids
+             if uid not in self.users and uid not in found_no_passwd_uids}
         )
 
     def _pre_run(self):
         """
-        Initializes allusers to be empty.
+        Initializes allusers_hist to be empty.
         """
-        self.allusers = usage.metrics.copy()
+        self.allusers_hist = []
 
     def _pre_collect(self):
         """
@@ -85,12 +98,14 @@ class Collector(object):
         """
         Computes the total usage from the sum of user cpu and memory.
         """
-        self.allusers["cpu"] = sum(
-            user_obj.cpu_usage for user_obj in self.users.values()
-        )
-        self.allusers["mem"] = sum(
-            user_obj.mem_usage for user_obj in self.users.values()
-        )
+        if self.allusers_hist:
+            self.allusers = usage.average(*self.allusers_hist)
+            if self.rhel7_compat:
+                self.allusers.usage["mem"] = sum(
+                    user_obj.mem_usage for user_obj in self.users.values()
+                )
+        else:
+            self.allusers = cinfo.StaticAllUsersSlice()
 
     def _post_collect(self):
         """
@@ -98,7 +113,7 @@ class Collector(object):
         """
         for uid, user_obj in self.users.items():
             user_history = user_obj.history[0]
-            summed_proc = pidinfo.StaticProcess()
+            summed_proc = pidinfo.StaticProcess(-1)
             if user_history["pids"]:  # If there are processes
                 summed_proc = sum(user_history["pids"].values())
 
@@ -111,6 +126,7 @@ class Collector(object):
 
             # Add "other processes"
             user_history["pids"][-1] = pidinfo.StaticProcess(
+                -1,
                 usage={
                     "cpu": max(user_history["cpu"] - summed_proc.usage["cpu"], 0),
                     "mem": max(user_history["mem"] - summed_proc.usage["mem"], 0)
@@ -127,14 +143,22 @@ class Collector(object):
         waittime = self.interval / self.poll
         timer = TimeRecorder()
 
+        allusers_instant_histories = []
         gen_instant_histories = collections.defaultdict(list)
         processes_instant_histories = collections.defaultdict(
             lambda: collections.defaultdict(list)
         )
+        # Collect usage in a poll
         for _ in range(0, self.poll):
             timer.start(waittime)
 
-            # Collect usage in a poll
+            # Collect Overall General Metrics: CPU, Memory (AllUsersSliceInstance())
+            try:
+                allusers_instant_histories.append(cinfo.AllUsersSliceInstance())
+            except OSError as err:
+                logger.debug(err)
+                continue
+
             for uid, user_obj in self.users.items():
                 # Collect General Metrics: CPU, Memory (UserSliceInstance())
                 pids = []
@@ -145,10 +169,8 @@ class Collector(object):
                     )
                     pids = user_slice.pids()
                     gen_instant_histories[user_obj].append(user_slice)
-                except (FileNotFoundError, OSError) as err:
-                    if err.errno == 13:
-                        # Cannot write to a file
-                        logger.warning(err)
+                except OSError:
+                    continue
 
                 # Collect Process Metrics: CPU, Memory (ProcessInstance())
                 for pid in pids:
@@ -157,7 +179,7 @@ class Collector(object):
                             pidinfo.ProcessInstance(pid, pss=cfg.processes.pss,
                                                     swap=cfg.processes.memsw)
                         )
-                    except (FileNotFoundError, OSError) as err:
+                    except OSError as err:
                         if err.errno == 13:
                             # Likely don't have permission to read from
                             # /proc/<pid>/smaps
@@ -165,9 +187,18 @@ class Collector(object):
             time.sleep(timer.delta)
 
         # Average the usage over all the polls
+        div_by = self.poll - 1
+        # Average AllUsersSliceInstance() into StaticAllUsersSlice()
+        if allusers_instant_histories:
+            self.allusers_hist.append(
+                usage.average(
+                    *usage.combine(*allusers_instant_histories),
+                    by=div_by
+                )
+            )
+
         for user_obj in self.users.values():
             # -1 since we have one less static obj than instant obj after combo
-            div_by = self.poll - 1
             # Average UserSliceInstance() into StaticUserSlice()
             if len(gen_instant_histories[user_obj]) >= 2:
                 userslice = usage.average(

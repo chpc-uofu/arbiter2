@@ -12,80 +12,12 @@ philosophy of Static, non-Static and Instance. See usage.py for details.
 """
 
 
-class StaticProcess(usage.Usage):
-    """
-    A single state of a process that contains human readable values.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes a static Process.
-        """
-        super().__init__(**kwargs)
-        self.pid = -1
-        self.name = "unknown"
-        self.uptime = -1
-        self.owner = -1
-        self.count = 1
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def __repr__(self):
-        return "<{} {}: {}>".format(type(self).__name__, self.pid, self.name)
-
-    def __add__(self, other):
-        """
-        Adds two StaticProcess objects together by taking the values of the
-        first, taking the max of the uptime, adding the count and adding the
-        usage.
-        """
-        if isinstance(other, type(self)):
-            new = super().__add__(other)
-            new.uptime = max(self.uptime, other.uptime)
-            new.count = self.count + other.count
-            return new
-        return super().__add__(other)
-
-    def __sub__(self, other):
-        """
-        Subtracts two StaticProcess objects together by taking the values of
-        the first, taking the max of the uptime, subtracting the count and
-        subtracting the usage.
-        """
-        if isinstance(other, type(self)):
-            new = super().__sub__(other)
-            new.uptime = max(self.uptime, other.uptime)
-            new.count = self.count - other.count
-            return new
-        return super().__sub__(other)
-
-    def __truediv__(self, other):
-        """
-        Divides two StaticProcesses usage and count by the given number.
-        """
-        if isinstance(other, (int, float, complex)):
-            new = super().__truediv__(other)
-            new.count = math.ceil(self.count / other)
-            return new
-        return super().__truediv__(other)
-
-    def __floordiv__(self, other):
-        """
-        Floor divides two StaticProcesses usage and count by the given number.
-        """
-        if isinstance(other, (int, float, complex)):
-            new = super().__floordiv__(other)
-            new.count = self.count // other
-            return new
-        return super().__floordiv__(other)
-
-
-class Process(StaticProcess):
+class Process():
     """
     An object that contains methods/properties related to a process.
     """
 
-    def __init__(self, pid, **kwargs):
+    def __init__(self, pid):
         """
         Initializes an object that contains methods/properties related to a
         process.
@@ -93,10 +25,7 @@ class Process(StaticProcess):
         pid: int
             A process id.
         """
-        super().__init__(pid=pid, **kwargs)
-        self.name = self.curr_name()
-        self.uptime = self.curr_uptime()
-        self.owner = self.curr_owner()
+        self.pid = pid
 
     def active(self):
         """
@@ -164,7 +93,7 @@ class Process(StaticProcess):
         index = 2 if effective_uid else 1
         try:
             return int(self.proc_status("Uid").split("\t")[index])
-        except (FileNotFoundError, IndexError):
+        except (OSError, IndexError):
             return -1
 
     def curr_uptime(self):
@@ -239,17 +168,91 @@ class Process(StaticProcess):
         return sum(map(int, self.proc_stat(14, 15)))
 
 
+class StaticProcess(usage.Usage, Process):
+    """
+    A single state of a process that contains human readable values.
+    """
+
+    def __init__(self, pid, **kwargs):
+        """
+        Initializes a static Process.
+        """
+        Process.__init__(self, pid)
+        super().__init__()
+        self.name = "unknown"
+        self.uptime = -1
+        self.owner = -1
+        self.count = 1
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __repr__(self):
+        return "<{} {}: {}>".format(type(self).__name__, self.pid, self.name)
+
+    def __str__(self):
+        return "{} ({})".format(self.name, self.pid)
+
+    def __add__(self, other):
+        """
+        Adds two StaticProcess objects together by taking the values of the
+        first, taking the max of the uptime, adding the count and adding the
+        usage.
+        """
+        if isinstance(other, type(self)):
+            new = super().__add__(other)
+            new.uptime = max(self.uptime, other.uptime)
+            new.count = self.count + other.count
+            return new
+        return super().__add__(other)
+
+    def __sub__(self, other):
+        """
+        Subtracts two StaticProcess objects together by taking the values of
+        the first, taking the max of the uptime, subtracting the count and
+        subtracting the usage.
+        """
+        if isinstance(other, type(self)):
+            new = super().__sub__(other)
+            new.uptime = max(self.uptime, other.uptime)
+            new.count = self.count - other.count
+            return new
+        return super().__sub__(other)
+
+    def __truediv__(self, other):
+        """
+        Divides two StaticProcesses usage and count by the given number.
+        """
+        if isinstance(other, (int, float, complex)):
+            new = super().__truediv__(other)
+            new.count = math.ceil(self.count / other)
+            return new
+        return super().__truediv__(other)
+
+    def __floordiv__(self, other):
+        """
+        Floor divides two StaticProcesses usage and count by the given number.
+        """
+        if isinstance(other, (int, float, complex)):
+            new = super().__floordiv__(other)
+            new.count = self.count // other
+            return new
+        return super().__floordiv__(other)
+
+
 class ProcessInstance(Process):
     """
     An object that contains instantaneous usage information related to a
     process.
     """
 
-    def __init__(self, pid, pss=False, swap=True, **kwargs):
+    def __init__(self, pid, pss=False, swap=True):
         """
         Initializes the instantaneous usage information of a process.
         """
-        super().__init__(pid, **kwargs)
+        super().__init__(pid)
+        self.name = self.curr_name()
+        self.uptime = self.curr_uptime()
+        self.owner = self.curr_owner()
         self.memory_bytes = self.curr_memory_bytes(pss=pss, swap=swap)
         self.cputime = self.curr_cputime()
         self.clockticks = cinfo.total_clockticks()

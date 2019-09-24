@@ -6,6 +6,8 @@ import collections
 import logging
 import datetime
 import copy
+import usage
+
 
 logger = logging.getLogger("arbiter." + __name__)
 
@@ -107,8 +109,8 @@ def make_multi_stackplot(plot_filepath, x, y_cpu, y_mem, proc_names, hostname,
 
 
 def multi_stackplot_from_procs(plot_filepath, hostname, username,
-                               relevant_events, overall_usage, mem_ylimit,
-                               cpu_ylimit, mem_threshold=None,
+                               relevant_events, overall_usage, mem_quota,
+                               cpu_quota, mem_threshold=None,
                                cpu_threshold=None):
     """
     Makes a mutli-stackplot from a relevant_events dictionary. The plot will
@@ -127,10 +129,10 @@ def multi_stackplot_from_procs(plot_filepath, hostname, username,
     overall_usage:
         Overall usage of the user in the form [timestamps, CPU, memory].
         See actions.output for more information.
-    mem_ylimit: int
-        The y limit of the memory plot.
-    cpu_ylimit: int
-        The y limit of the cpu plot.
+    mem_quota: float
+        The memory quota.
+    cpu_quota: float
+        The cpu quota.
     mem_threshold: int, None
         The y mem value to place a optional threshold horizontal bar.
     cpu_threshold: int, None
@@ -168,7 +170,9 @@ def multi_stackplot_from_procs(plot_filepath, hostname, username,
         proc_mem_usages = proc_proportional_usages[proc_name][1]
         proc_cpu_usages = proc_proportional_usages[proc_name][0]
 
-        # For each time event, fit the usage to the overall usage
+        # For each time event, fit the usage to the overall usage. Effectively
+        # useless of "other processes**" is enabled since the difference
+        # between process usage and general/cgroup usage is zero.
         for num in range(len(proc_mem_usages)):
             ts = gen_timestamps[num]
             proc_mem_usages[num] = _fit_usage_to(proc_mem_usages[num],
@@ -183,10 +187,17 @@ def multi_stackplot_from_procs(plot_filepath, hostname, username,
         cpu_usages.append(proc_proportional_usages[proc_name][0])
         proc_names.append(proc_name)
 
-    sorted_cpu, sorted_mem, sorted_names = _sort_based_on_usage(cpu_usages,
-                                                                mem_usages,
-                                                                proc_names)
+    sorted_usage = usage.rel_sorted(
+        zip(cpu_usages, mem_usages, proc_names),
+        cpu_quota, mem_quota,
+        key=lambda z: (sum(z[0]), sum(z[1])),  # cpu, memory
+        reverse=True
+    )
+    sorted_cpu, sorted_mem, sorted_names = zip(*sorted_usage)
 
+    padding = 1.2
+    mem_ylimit = mem_quota * padding
+    cpu_ylimit = cpu_quota * padding
     make_multi_stackplot(plot_filepath,
                          gen_timestamps,
                          sorted_cpu,
@@ -220,24 +231,3 @@ def _fit_usage_to(usage, total_usage, target_usage):
         return usage * target_usage / total_usage
     except ZeroDivisionError:
         return 0.0
-
-
-def _sort_based_on_usage(cpu_usages, mem_usages, proc_names):
-    """
-    Sorts the three different lists of process properties by the sum of CPU
-    and memory usage per process.
-
-    cpu_usages: [float, ]
-        CPU usage values.
-    mem_usages: [float, ]
-        Memory usage values. The order should match the above.
-    proc_names: [str, ]
-        Process names. The order should match the above.
-    """
-    combined_usage = zip(cpu_usages, mem_usages, proc_names)
-    sorted_zip_usage = sorted(combined_usage,
-                              key=lambda x: sum(x[0]) + sum(x[1]),
-                              reverse=True)
-    if not zip(*sorted_zip_usage):
-        return [], [], []
-    return zip(*sorted_zip_usage)

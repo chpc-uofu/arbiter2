@@ -60,7 +60,7 @@ def run(args):
     # Analyze the information that has been collected
     while True:
         allusers, users = collector.run()
-        allusers_hist.appendleft(allusers)
+        allusers_hist.appendleft(allusers.usage)
 
         if exit_file_updated(args.exit_file, last_exit_file_update):
             exit_time = os.path.getctime(args.exit_file)
@@ -121,7 +121,7 @@ def run(args):
         if (cfg.high_usage_watcher.high_usage_watcher
                 and high_usage_timer.delta <= 0
                 and high_usage_watcher.is_high_usage(allusers_hist)):
-            high_usage_watcher.send_high_usage_email(allusers, users)
+            high_usage_watcher.send_high_usage_email(allusers.usage, users)
             high_usage_timer.start(cfg.high_usage_watcher.timeout)
 
 
@@ -230,7 +230,7 @@ def set_permissions(user_obj):
     memsw = cfg.processes.memsw
 
     # Set permissions
-    if not permissions.has_cgroup_permissions(uid, memsw):
+    if not permissions.has_write_permissions(uid, memsw):
         warning = "Failed to set file permissions for {}".format(uid)
         logger.debug("Setting file permissions for %s", uid)
         try:
@@ -239,6 +239,8 @@ def set_permissions(user_obj):
             logger.warning("%s due to a permissions error", warning)
         except FileNotFoundError:
             logger.debug("%s due to the cgroup file not existing", warning)
+        except OSError as err:
+            logger.debug("%s due to %s", warning, err)
 
 
 def set_quotas(user_obj):
@@ -261,7 +263,7 @@ def set_quotas(user_obj):
         eq_cpu_quota = mostly_eq(user_obj.cpu_quota, cgroup.cpu_quota())
         eq_mem_quota = mostly_eq(user_obj.mem_quota,
                                  cinfo.bytes_to_pct(cgroup.mem_quota(memsw)))
-    except FileNotFoundError:
+    except OSError:
         # If user disappears, don't want to set limit
         return
 
@@ -272,3 +274,5 @@ def set_quotas(user_obj):
             actions.update_status(cgroup, status.current, status.default)
         except FileNotFoundError:
             logger.debug("Limit could no be set because the user disappeared")
+        except OSError as err:
+            logger.debug("Limit could not be set because %s", err)

@@ -53,7 +53,9 @@ def evaluate(user_obj):
             logger.info("Lowering the occurrences count of %s", uid)
             service_logger.info("User %s penalty occurrences has lowered to: "
                                 "%s", username, status.occurrences - 1)
-            statuses.update_occurrences(uid, -1, update_timestamp=True)
+            if not statuses.update_occurrences(uid, -1, update_timestamp=True):
+                logger.warning("Occurrences couldn't be lowered since the user"
+                               "isn't in the status database!")
 
         # If the user is being bad
         elif badness_score > 0:

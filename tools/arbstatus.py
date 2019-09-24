@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import cfgparser
+from cfgparser import cfg, shared
 import getpass
 import time
 import os
@@ -14,7 +15,7 @@ def main(args):
     import statuses
     status_config = statuses.StatusConfig(
         status_loc=args.database_loc,
-        status_table=cfgparser.shared.status_tablename
+        status_table=shared.status_tablename
     )
     status = statuses.get_status(
         pwd.getpwnam(args.username).pw_uid,
@@ -49,18 +50,13 @@ def configure(args):
     Configures the program so that it can function correctly.
     """
     try:
-        config = cfgparser.combine_toml(*args.configs)
-        if not cfgparser.check_config(config, pedantic=False):
+        if not cfgparser.load_config(*args.configs):
             print("There was an issue with the specified configuration (see "
                   "above). You can investigate this with the cfgparser.py "
                   "tool.")
             sys.exit(2)
-        else:
-            cfg = cfgparser.cfg
-            shared = cfgparser.shared
-            cfg.add_subconfig(config)
-            if not args.database_loc:
-                args.database_loc = cfg.database.log_location + "/" + shared.statusdb_name
+        if not args.database_loc:
+            args.database_loc = cfg.database.log_location + "/" + shared.statusdb_name
     except (TypeError, toml.decoder.TomlDecodeError) as err:
         print("Configuration error:", str(err), file=sys.stderr)
         sys.exit(2)

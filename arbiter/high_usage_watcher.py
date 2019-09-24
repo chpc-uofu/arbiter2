@@ -7,19 +7,20 @@ import actions
 import logdb
 import time
 
+import usage
+
 logger = logging.getLogger("arbiter." + __name__)
 
 # The amount of time before a high usage warning to log out about user usage
 high_usage_warning_context = 10 + cfg.high_usage_watcher.threshold_period
 
-def is_high_usage(allusers_hist):
+def is_high_usage(usage_hist):
     """
     Watches for high usage and returns whether appropriate action needs to be
     taken if high usage has been detected.
 
-    allusers_hist: iter
-        A iterable of a dict with "mem" and "cpu" usage representing all users
-        at a point.
+    usage_hist: iter
+        A iterable of a usage dicts representing the usage of all the users.
     """
     cpu_count = multiprocessing.cpu_count()
     if cfg.high_usage_watcher.div_cpu_thresholds_by_threads_per_core:
@@ -28,9 +29,9 @@ def is_high_usage(allusers_hist):
     mem_threshold = cfg.high_usage_watcher.mem_usage_threshold
 
     return all(
-        allusers["cpu"] > cpu_threshold * 100
-        or allusers["mem"] > mem_threshold * 100
-        for allusers in allusers_hist
+        usage["cpu"] > cpu_threshold * 100
+        or usage["mem"] > mem_threshold * 100
+        for usage in usage_hist
     )
 
 
@@ -41,37 +42,42 @@ def get_high_usage_users(users):
     users: {}
         A dictionary of User(), identified by their uid.
     """
-    return sorted(
+    # We're going to judge everyone by their usage relative to the entirety
+    # of the machine, instead of status quotas, since we only care about usage,
+    # not a persons status.
+    return usage.rel_sorted(
         users.values(),
-        reverse=True,
-        key=lambda u: u.cpu_usage + u.mem_usage
+        multiprocessing.cpu_count() * 100, 100,
+        key=lambda u: (u.cpu_usage, u.mem_usage),
+        reverse=True
     )[:cfg.high_usage_watcher.user_count]
 
 
-def send_high_usage_email(allusers, users):
+def send_high_usage_email(usage, users):
     """
     Sends a email about high usage on the machine.
 
-    allusers: dict
-        A dict with "mem" and "cpu" usage representing all users at a point.
+    usage: dict
+        A usage dict containing metrics and usage.
     users: {}
-        A dictionary of users organized by their uid and containing a User obj.
-        Usage is pulled from the users.
+        A dictionary of User(), identified by their uid.
     """
     top_users = get_high_usage_users(users)
-    cpu_usage, mem_usage = allusers["cpu"], allusers["mem"]
-
     logger.info("Sending an overall high usage email")
-    actions.send_high_usage_email(top_users, cpu_usage, mem_usage,
-                                  cfg.email.admin_emails, cfg.email.from_email)
-    log_high_usage(allusers, users)
+    actions.send_high_usage_email(top_users, usage["cpu"], usage["mem"])
+    log_high_usage(usage, users)
 
 
-def log_high_usage(allusers, users):
+def log_high_usage(usage, users):
     """
     Logs out information about what caused a high usage warning.
+
+    usage: dict
+        A usage dict containing metrics and usage.
+    users: dict
+        A dictionary of User(), identified by their uid.
     """
-    logger.debug("Usage that caused warning: %s", allusers)
+    logger.debug("Usage that caused warning: %s", usage)
     rotated_filename = logdb.rotated_filename(
         cfg.database.log_location + "/" + shared.logdb_name,
         cfg.database.log_rotate_period,

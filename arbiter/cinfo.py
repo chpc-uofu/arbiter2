@@ -4,6 +4,19 @@
 A module that gets utility information relating to systemd cgroups (Linux
 cgroups v1). The classes follow the usage module philosophy of Static,
 non-Static and Instance. See usage.py for details.
+
+This module uses diamond inheritance (it was either that or duplicating
+properties/methods), so beware of the fact that Python resolves those things
+in the following fashion:
+A(), B(A), C(A), D(B, C)
+
+super() resolves to:
+A: object
+B: A
+C: A
+D: B
+
+In D, you can explicitly call C via C.method(self, ...).
 """
 
 import logging
@@ -11,11 +24,14 @@ import re
 import time
 import pathlib
 import pwd
+import os
 import glob
 import usage
 
 logger = logging.getLogger("arbiter." + __name__)
 
+# The controller used to check whether a cgroup exists and to get pids from.
+default_controller = "cpu,cpuacct"
 
 def threads_per_core():
     """
@@ -101,71 +117,13 @@ def free_swap():
     return proc_meminfo("SwapFree") * 1024
 
 
-class StaticSystemdCGroup(usage.Usage):
-    """
-    A single state of a systemd cgroup that contains human readable values.
-    """
-
-    def __init__(self, name, parent, **kwargs):
-        """
-        Initializes a static SystemdCGroup.
-        """
-        super().__init__(**kwargs)
-        self.name = name
-        self.parent = parent
-        self.base_path = pathlib.Path("/sys/fs/cgroup/")
-        self._pids = []
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def __repr__(self):
-        return "<{}: {}>".format(
-            type(self).__name__,
-            str(self.base_path / self.parent / self.name)
-        )
-
-    def __add__(self, other):
-        """
-        Adds two StaticSystemdCGroup objects together by taking the values of
-        the first and adding the usage and pids.
-        """
-        if isinstance(other, type(self)):
-            new = super().__add__(other)
-            new.name = self.name
-            new.parent = self.parent
-            new.base_path = self.base_path
-            new._pids = list(set(self._pids + other._pids))
-            return new
-        return super().__add__(other)
-
-    def __sub__(self, other):
-        """
-        Subtracts two StaticSystemdCGroup objects together by taking the values
-        of the first, subtracting the usage and adding the pids.
-        """
-        if isinstance(other, type(self)):
-            new = super().__sub__(other)
-            new.name = self.name
-            new.parent = self.parent
-            new.base_path = self.base_path
-            new._pids = list(set(self._pids + other._pids))
-            return new
-        return super().__sub__(other)
-
-    def pids(self):
-        """
-        Returns the recorded pids of the systemd cgroup.
-        """
-        return self._pids
-
-
-class SystemdCGroup(StaticSystemdCGroup):
+class SystemdCGroup():
     """
     An object that contains methods/properties related to a specific systemd
     cgroup.
     """
 
-    def __init__(self, name, parent, memsw=True):
+    def __init__(self, name, parent):
         """
         Initializes an object that contains methods/properties related to a
         systemd cgroup. If a parent is specified, the parent's path must be at
@@ -183,8 +141,9 @@ class SystemdCGroup(StaticSystemdCGroup):
         >>> c.SystemdCGroup("systemd-journald.service", "system.slice")
         >>> c.SystemdCGroup("user.slice")
         """
-        self.memsw = memsw
-        super().__init__(name=name, parent=parent)
+        self.name = name
+        self.parent = parent
+        self.base_path = pathlib.Path("/sys/fs/cgroup/")
 
     def controller_exists(self, controller, isdir=True):
         """
@@ -193,7 +152,7 @@ class SystemdCGroup(StaticSystemdCGroup):
         path = self.base_path / controller / self.parent / self.name
         return path.exists() and path.is_dir() if isdir else True
 
-    def controller_path(self, controller="systemd", cgfile=""):
+    def controller_path(self, controller=default_controller, cgfile=""):
         """
         Returns the path to a cgroup property or file. If a property is not
         given, the fully qualified systemd controller path is returned. If the
@@ -231,7 +190,7 @@ class SystemdCGroup(StaticSystemdCGroup):
         try:
             self.controller_path()
             return True
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             return False
 
     def cpu_usage_per_core(self):
@@ -277,7 +236,7 @@ class SystemdCGroup(StaticSystemdCGroup):
         Returns a list of current pids in the cgroup.
         """
         pids = []
-        with open(self.controller_path("systemd", "cgroup.procs")) as procfile:
+        with open(self.controller_path(cgfile="cgroup.procs")) as procfile:
             for pid in procfile.readlines():
                 pids.append(pid.strip())
         return pids
@@ -355,99 +314,75 @@ class SystemdCGroup(StaticSystemdCGroup):
         self._set_quota(int(quota / 100 * shares), "cpuacct", "cpu.cfs_quota_us")
 
 
-class StaticUserSlice(StaticSystemdCGroup):
+class StaticSystemdCGroup(usage.Usage, SystemdCGroup):
     """
-    A single state of a specific systemd user-$UID.slice that contains human
-    readable values.
+    A single state of a systemd cgroup that contains human readable values.
     """
 
-    def __init__(self, uid, **kwargs):
+    def __init__(self, name, parent, **kwargs):
         """
-        Initializes a static UserSlice.
+        Initializes a static SystemdCGroup.
+        """
+        self._pids = []
+        SystemdCGroup.__init__(self, name, parent)
+        super().__init__(**kwargs)
 
-        uid: int
-            A uid of the user-$UID.slice.
-        """
-        # Prevent multiple values for keyword args
-        kwargs.pop("name", None)
-        kwargs.pop("parent", None)
-        super().__init__("user-{}.slice".format(uid), "user.slice", **kwargs)
-        self.uid = int(uid)
+    def __repr__(self):
+        return "<{}: {}>".format(
+            type(self).__name__,
+            str(self.base_path / self.parent / self.name)
+        )
 
     def __add__(self, other):
         """
-        Adds two UserSlice objects together by taking the values of the first
-        and adding the usage and pids.
+        Adds two StaticSystemdCGroup objects together by taking the values of
+        the first and adding the usage and pids.
         """
         if isinstance(other, type(self)):
             new = super().__add__(other)
-            new.uid = self.uid
+            new.name = self.name
+            new.parent = self.parent
+            new.base_path = self.base_path
+            new._pids = list(set(self._pids + other._pids))
             return new
         return super().__add__(other)
 
     def __sub__(self, other):
         """
-        Subtracts two UserSlice objects together by taking the values of the
-        first and subtracting the usage and adding the pids.
+        Subtracts two StaticSystemdCGroup objects together by taking the values
+        of the first, subtracting the usage and adding the pids.
         """
         if isinstance(other, type(self)):
             new = super().__sub__(other)
-            new.uid = self.uid
+            new.name = self.name
+            new.parent = self.parent
+            new.base_path = self.base_path
+            new._pids = list(set(self._pids + other._pids))
             return new
         return super().__sub__(other)
 
-
-class UserSlice(SystemdCGroup):
-    """
-    An object that contains methods/propreties related to a specific systemd
-    user-$UID.slice.
-    """
-
-    def __init__(self, uid, **kwargs):
-        """
-        Initializes an object that contains methods/properties related to a
-        systemd user-$UID.slice.
-
-        uid: int
-            A uid of the user-$UID.slice.
-        """
-        super().__init__("user-{}.slice".format(uid), "user.slice", **kwargs)
-        self.uid = int(uid)
-
     def pids(self):
         """
-        Returns a list of pids in the cgroup. If session@scope is turned on
-        for user-$UID.slices, returns the pids in all sessions.
+        Returns the recorded pids of the systemd cgroup.
         """
-        pids = super().pids()  # top level pids
-        # if session@scope is turned on
-        for session in glob.glob(self.controller_path("systemd") +
-                                 "/*.scope/cgroup.procs"):
-            with open(session) as proc_file:
-                for pid in proc_file.readlines():
-                    pids.append(pid.strip())
-        return pids
+        return self._pids
 
 
-class UserSliceInstance(UserSlice):
+class SystemdCGroupInstance(SystemdCGroup):
     """
     An object that contains instaneous usage information related to a specific
-    systemd user-$UID.slice.
+    systemd cgroup.
     """
 
-    def __init__(self, uid, **kwargs):
+    def __init__(self, name, parent, memsw=False):
         """
-        Initializes the instaneous usage information of a systemd
-        user-$UID.slice.
-
-        uid: int
-            A uid of the user-$UID.slice.
+        Initializes the instaneous usage information of a systemd cgroup
         """
-        super().__init__(uid, **kwargs)
+        SystemdCGroup.__init__(self, name, parent)
         self.time = time.time()
         # Raise errors if these fail since it likely means user disappeared
         self.cputime = sum(self.cpu_usage_per_core())
-        self.memory_bytes = self.mem_usage(memsw=self.memsw)
+        self.memory_bytes = self.mem_usage(memsw=memsw)
         self._pids = self.pids()
 
     def __add__(self, other):
@@ -464,6 +399,29 @@ class UserSliceInstance(UserSlice):
             )
         )
 
+    def _calc_usage(self, other):
+        """
+        Returns the usage between the instances.
+        """
+        # If a cgroup disappears between collection of instances, the
+        # instances will have drastically different CPU and memory data,
+        # leading to erroneous results. To get around this, we zero out usage
+        # if the cputime (which is cumulative) of the first is greater than
+        # the second.
+        if self.cputime > other.cputime:
+            return usage.metrics.copy()  # Zero out the usage
+        return {
+            "cpu": (
+                max(other.cputime - self.cputime, 0) /
+                abs(other.time - self.time) / 1E7
+            ),
+            "mem": (
+                (other.memory_bytes + self.memory_bytes) / 2
+                / total_mem * 100
+            )
+        }
+
+
     def __truediv__(self, other):
         """
         Averages two UserSliceInstances together into a human readable
@@ -471,28 +429,157 @@ class UserSliceInstance(UserSlice):
         the dividend (older / newer).
         """
         if isinstance(other, type(self)):
-            # If a user logs in and out between collection of instances, the
-            # instances will have drastically different cpu and memory data,
-            # leading to erroneous results. To get around this, we zero out
-            # usage if the cputime (which is cumulative) of the first is
-            # greater than the second.
-            if self.cputime > other.cputime:
-                calc_usage = usage.metrics.copy()  # Zero out the usage
-            else:
-                calc_usage = {
-                    "cpu": (
-                        max(other.cputime - self.cputime, 0) /
-                        abs(other.time - self.time) / 1E7
-                    ),
-                    "mem": (
-                        (other.memory_bytes + self.memory_bytes) / 2
-                        / total_mem * 100
-                    )
-                }
+            return StaticSystemdCGroup(
+                self.name,
+                self.parent,
+                _pids=list(set(self._pids + other._pids)),
+                usage=self._calc_usage(other)
+            )
+        return super().__truediv__(other)
+
+
+class AllUsersSlice(SystemdCGroup):
+    """
+    An object that contains methods/propreties related to user.slice.
+    """
+
+    def __init__(self):
+        """
+        Initializes an object that contains methods/properties related to
+        user.slice.
+        """
+        super().__init__("user.slice", "")
+
+
+class StaticAllUsersSlice(StaticSystemdCGroup, AllUsersSlice):
+    """
+    A single state of user.slice that contains human readable values.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes a static AllUsersSlice.
+        """
+        AllUsersSlice.__init__(self)
+        super().__init__(self.name, self.parent, **kwargs)
+
+
+class AllUsersSliceInstance(SystemdCGroupInstance, AllUsersSlice):
+    """
+    An object that contains instaneous usage information related to a specific
+    systemd user-$UID.slice.
+    """
+
+    def __init__(self, memsw=False):
+        """
+        Initializes the instaneous usage information of a systemd
+        user-$UID.slice.
+
+        uid: int
+            A uid of the user-$UID.slice.
+        """
+        AllUsersSlice.__init__(self)
+        super().__init__(self.name, self.parent, memsw=memsw)
+
+
+class UserSlice(SystemdCGroup):
+    """
+    An object that contains methods/propreties related to a specific systemd
+    user-$UID.slice.
+    """
+
+    def __init__(self, uid):
+        """
+        Initializes an object that contains methods/properties related to a
+        systemd user-$UID.slice.
+
+        uid: int
+            A uid of the user-$UID.slice.
+        """
+        super().__init__("user-{}.slice".format(uid), "user.slice")
+        self.uid = int(uid)
+
+    def pids(self):
+        """
+        Returns a list of pids in the cgroup. If session@scope is turned on
+        for user-$UID.slices, returns the pids in all sessions.
+        """
+        pids = super().pids()  # top level pids
+        # if session@scope is turned on
+        path = "{}/*.scope/cgroup.procs".format(self.controller_path())
+        for session in glob.iglob(path):
+            with open(session) as proc_file:
+                for pid in proc_file.readlines():
+                    pids.append(pid.strip())
+        return pids
+
+
+class StaticUserSlice(StaticSystemdCGroup, UserSlice):
+    """
+    A single state of a specific systemd user-$UID.slice that contains human
+    readable values.
+    """
+
+    def __init__(self, uid, **kwargs):
+        """
+        Initializes a static UserSlice.
+
+        uid: int
+            A uid of the user-$UID.slice.
+        """
+        UserSlice.__init__(self, uid)  # Initialize the uid
+        # Prevent multiple values for keyword args
+        kwargs.pop("name", None)
+        kwargs.pop("parent", None)
+        super().__init__(self.name, self.parent, **kwargs)
+
+    def __add__(self, other):
+        """
+        Adds two UserSlice objects together by taking the values of the first
+        and adding the usage and pids.
+        """
+        new = super().__add__(other)
+        new.uid = self.uid
+        return new
+
+    def __sub__(self, other):
+        """
+        Subtracts two UserSlice objects together by taking the values of the
+        first and subtracting the usage and adding the pids.
+        """
+        new = super().__sub__(other)
+        new.uid = self.uid
+        return new
+
+
+class UserSliceInstance(SystemdCGroupInstance, UserSlice):
+    """
+    An object that contains instaneous usage information related to a specific
+    systemd user-$UID.slice.
+    """
+
+    def __init__(self, uid, memsw=False):
+        """
+        Initializes the instaneous usage information of a systemd
+        user-$UID.slice.
+
+        uid: int
+            A uid of the user-$UID.slice.
+        """
+        UserSlice.__init__(self, uid)
+        super().__init__(self.name, self.parent)
+
+    def __truediv__(self, other):
+        """
+        Averages two UserSliceInstances together into a human readable
+        StaticUserSlice. The divisor instance should come later in time than
+        the dividend (older / newer).
+        """
+        if isinstance(other, type(self)):
             return StaticUserSlice(
                 self.uid,
                 _pids=list(set(self._pids + other._pids)),
-                usage=calc_usage
+                usage=self._calc_usage(other)
             )
         return super().__truediv__(other)
 
@@ -505,11 +592,11 @@ def wait_till_uids(min_uid=0):
     uids = []
     while not uids:
         time.sleep(0.5)
-        uids = [uid for uid in current_cgroup_uids() if uid >= min_uid]
+        uids = current_cgroup_uids(min_uid=min_uid)
     return uids
 
 
-def current_cgroup_uids(controller="memory"):
+def current_cgroup_uids(min_uid=0):
     """
     Returns a list of str uids that are active in the user.slice cgroup.
 
@@ -522,37 +609,32 @@ def current_cgroup_uids(controller="memory"):
     """
     uids = []
     # Loop through names and remove the "user-" and ".slice" part
-    for name in current_cgroups(controller=controller):
+    for name in current_cgroups():
         uid = re.findall(r"-(\d+)", name)
         uids.extend(list(map(int, uid)))
-    return uids
+    return [uid for uid in uids if uid >= min_uid]
 
 
-def current_cgroups(parent="user.slice", controller="systemd"):
+def current_cgroups(parent="user.slice", controller=default_controller):
     """
     Returns a list of all the current cgroup slices' paths that are active on
     the system. If a parent is specified, returns all cgroups below that parent
-    cgroup. By default, all user cgroups are returned.
+    cgroup. By default, all user cgroups are returned. This call will not
+    throw FileNotFoundError, unlike others.
 
     parent: str
         The parent cgroup that contains the path of its parents.
+    controller: str
+        Which cgroup controller to pull from. (Assumes that accounting is
+        enabled for the controller)
 
     >>> current_cgroups()
     ["user-1000.slice", "user-1010.slice", "user-robot7.slice"]
     >>> current_cgroups("user.slice/user-1010.slice")
     []
     """
-    parent.rstrip("/").lstrip("/")
-    parent_path = pathlib.Path("/sys/fs/cgroup/{}/{}".format(controller, parent))
-
-    # for each .slice in the parent path, return the slice name
-    cgroup_paths = []
-    for path in parent_path.glob("**/*.slice"):
-        try:
-            cgroup_paths.append(path.name)
-        except FileNotFoundError:
-            continue
-    return cgroup_paths
+    glob_str= "/sys/fs/cgroup/{}/{}/**/*.slice".format(controller, parent)
+    return [os.path.basename(p) for p in glob.iglob(glob_str, recursive=True)]
 
 
 def total_clockticks():
@@ -572,5 +654,29 @@ def passwd_entry(uid):
     try:
         pwd.getpwuid(uid)
         return True
-    except KeyError as e:
+    except KeyError:
         return False
+
+
+def safe_check_on_any_uid(func, min_uid=0, retry_interval=0.1):
+    """
+    Returns whether the function (which takes a uid) is true for a uid on the
+    machine in a safe and atomic way. Normally with active uids, there is a
+    race condition pertaining to a user logging out during execution. This
+    works around that. Note that this function waits indefinitely for users.
+
+    func: function
+        A function that takes in a uid.
+    min_uid: int
+        The minimum uid to check on.
+    retry_interval: int
+        How long to wait to try again if all the uids on the machine disappear
+        during check.
+    """
+    while True:
+        for uid in wait_till_uids(min_uid):
+            try:
+                return func(uid)
+            except FileNotFoundError:
+                pass
+        time.sleep(retry_interval)

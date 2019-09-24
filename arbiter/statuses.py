@@ -217,8 +217,8 @@ def update_occurrences(uid, increase, update_timestamp=True,
                        status_config=default_config):
     """
     Updates the occurrences of the user by the increase amount. The occurrences
-    timstamp is updated if specifed. If the user is not in the status file,
-    an Exception is thrown.
+    timstamp is updated if specifed. Returns whether the operatation was
+    sucessful.
 
     uid: str
         The user's uid.
@@ -228,7 +228,7 @@ def update_occurrences(uid, increase, update_timestamp=True,
         Whether to update the occurrences timestamp of the user.
     """
     if not in_status_file(uid):
-        raise Exception("User could not be found in the status file")
+        return False
 
     update = ["UPDATE status SET occurrences = occurrences + ?,"]
     args = [increase]
@@ -239,6 +239,7 @@ def update_occurrences(uid, increase, update_timestamp=True,
     args.append(int(uid))
     database.execute_command(status_config.status_loc, "".join(update),
                              *tuple(args))
+    return True
 
 
 @decorators.retry((database.OperationalError), logger)

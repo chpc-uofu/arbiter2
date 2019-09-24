@@ -162,13 +162,17 @@ _Note: the database header must still exist in the toml file, even if all the va
 
 - Arbiter2 can optionally label the difference between cgroup and pid usage (which can be large if there are short lived processes) as "other processes". This is intended to get around the fact that if short lived processes run between Arbiter2's collection intervals, there will be unaccounted usage that is less than the recorded cgroup usage. This "other processes" usage can be whitelisted to prevent Arbiter2 from calling out bad usage, even when it may not fully know where it is coming from, including whether the unknown usage comes from whitelisted processes. In particular, users running compiliers likely are susceptible to high ammounts of "other processes".
 
-**whitelist** _(optional/defaulted: [])_: `string`
+**whitelist** _(optional/defaulted: [])_: `list of string`
 
 - A list of whitelisted process names. Each item in the whitelist is directly compared to the name of the command run.
 
 **whitelist_file** _(optional/defaulted: "")_: `string`
 
 - The filepath to the whitelist (either relative to `arbiter.py` or an abspath). Each item in the whitelist should be on a newline. See above for how the whitelist works.
+
+**proc_owner_whitelist** _(optional/defaulted: [0])_: `list of int`
+
+- A list of uids, where each process owned by that uid is whitelisted. This may be useful in scenarios where processes are executed using `su/sudo`, but you don't want that process usage to be assocated with the user's cgroup (all subprocesses created by you are put in your cgroup, regardness of whether you've su'd to someone else).
 
 ## Status `[status]`
 A status is a state that the user is in and the specific state and its properties are called a status group. A user can only have a single status at any moment, called their "current status," as well as a "default status," which is used to restore a user from their current status. A user's default status is determined by matching their uid or gid with the first status group encountered in the `order` variable. If the user doesn't match any listed in the order variable, their default status group is the `fallback_status`.

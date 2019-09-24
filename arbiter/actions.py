@@ -6,6 +6,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
+import itertools
 import threading
 import socket
 import collections
@@ -17,107 +18,155 @@ import logging
 import datetime
 import cinfo
 import statuses
+import usage
 import integrations
 from cfgparser import cfg
 
 logger = logging.getLogger("arbiter." + __name__)
 
 
-def prepare_warning_email(uid, username, realname, status_group, hostname,
-                          table, badness_timestamp, severity="new"):
+def send_warning_email(user, metadata, status_group, table, badness_timestamp,
+                       severity, plot_filepath):
     """
-    Prepare an email message to warn users about their usage policy
-    violations. Returns a tuple containing the subject line and message.
+    Sends a warning email message.
 
-    uid: str
-        The user's uid.
-    username: str
-        The user's username.
-    realname: str
-        The real name of the user.
+    user: user.User()
+        The user to send the email to.
+    metadata: Metadata()
+        A namedtuple with email_addr, username and realname values.
     status_group: str
         The new status group of the user.
-    hostname: str
-        The host on which the event took place.
     table: str
         The usage table.
     badness_timestamp: int
         A epoch timestamp of when the user starting being bad.
     severity: str
         The severity of the event (used in email titles).
+    plot_filepath: str
+        A path to the plot.
     """
-    # Prepare a subject line
+    username, realname, email_addr = metadata
+    to = [email_addr]
+    bcc = cfg.email.admin_emails
+    hostname = socket.gethostname()
     subject = integrations.warning_email_subject(hostname, severity, username,
                                                  realname)
 
-    # Prepare a message body
-    time_in_state = statuses.lookup_status_prop(status_group).timeout / 60
-    curr_cpu_quota, curr_mem_quota = statuses.lookup_quotas(uid, status_group)
-    default_status_group = statuses.lookup_default_status_group(uid)
-    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(
-        uid,
-        default_status_group
-    )
-    num_cores = round(default_cpu_quota / 100, 1)
+    time_in_penalty = statuses.lookup_status_prop(status_group).timeout / 60
+    penalty_cpu_quota, penalty_mem_quota = statuses.lookup_quotas(user.uid, status_group)
+    num_cores = round(user.cpu_quota / 100, 1)
     core_text = "core" if num_cores == 1 else "cores"
-    message = integrations.warning_email_body(
+    message_body = integrations.warning_email_body(
         table,
         username,
         realname,
         hostname,
         time.strftime("%H:%M on %m/%d", time.localtime(badness_timestamp)),
         status_group,
-        round(curr_cpu_quota / default_cpu_quota * 100),
+        round(penalty_cpu_quota / user.cpu_quota * 100),
         str(num_cores) + " " + core_text,
-        round(time_in_state),
-        round(curr_mem_quota / default_mem_quota * 100),
-        round(cinfo.pct_to_gb(default_mem_quota), 1)
+        round(time_in_penalty),
+        round(cinfo.pct_to_gb(user.mem_quota) / penalty_mem_quota * 100),
+        round(cinfo.pct_to_gb(user.mem_quota), 1)
     )
-    return subject, message
+
+    if cfg.general.debug_mode:
+        to = cfg.email.admin_emails
+        bcc = []
+        debug_head = """
+            <h2>Debug information</h2>
+            <p><em>The script is currently not making changes to user quotas or
+                   sending emails to users.</em></p>
+        """
+        wanted_fields = [
+            ("arbiter_refresh", cfg.general.arbiter_refresh),
+            ("history_per_refresh", cfg.general.history_per_refresh),
+            ("cpu_badness_threshold", cfg.badness.cpu_badness_threshold),
+            ("mem_badness_threshold", cfg.badness.mem_badness_threshold),
+            ("time_to_max_bad", cfg.badness.time_to_max_bad),
+            ("time_to_min_bad", cfg.badness.time_to_min_bad),
+        ]
+        debug_body = "<br>".join([
+            "{}: {}".format(field, value) for field, value in wanted_fields
+        ])
+        message_body = debug_head + debug_body + "<br>" + message_body
+
+    additional_text = ""
+    if cfg.processes.whitelist_other_processes:
+        additional_text = " These processes are whitelisted as defined above."
+    if plot_filepath:
+        message_body += ("""
+            <h2>Recent system usage</h2><img src="cid:{}">
+            <p><em>*This process is generally permitted on interactive nodes
+                and is only counted against you when considering memory usage
+                (regardless of the process, too much memory usage is still
+                considered bad; it cannot be throttled like CPU). The process
+                is included in this report to show usage holistically.</em></p>
+            <p><em>**This accounts for the difference between the overall usage
+                and the collected PID usage (which can be less accurate). This
+                may be large if there are a lot of short-lived processes (such
+                as compilers or quick commands) that account for a significant
+                fraction of the total usage.{}</em></p>
+        """).format(plot_filepath, additional_text)
+        message_body += "</em></p>"
+
+    send_email(
+        subject,
+        message_body,
+        to,
+        bcc,
+        cfg.email.from_email,
+        plot_filepath,
+        localhost=True if to and "@localhost" in to else False,
+        reply_to=cfg.email.reply_to
+    )
 
 
-def prepare_nice_email(uid, username, realname, status_group, hostname,
-                       timestamp):
+def send_nice_email(user, metadata, status_group):
     """
     Prepare an email message to notify users when their penalty status has
-    timed out and are back to their default status group. Returns a tuple
-    containing the subject line and message.
+    timed out and are back to their default status group.
 
-    uid: int
-        The user's uid.
-    username: str
-        The user's username.
-    realname: str
-        The real name of the user.
+    user: user.User()
+        The user to send the email to.
+    metadata: Metadata()
+        A namedtuple with email_addr, username and realname values.
     status_group: str
         The new status group of the user.
-    hostname: str
-        The host on which the event took place.
-    timestamp: str
-        The timestamp associated with the event.
     """
-    # Prepare a subject line
+    username, realname, email_addr = metadata
     subject = integrations.nice_email_subject(
-        hostname,
+        socket.gethostname(),
         username,
         realname,
         status_group
     )
-
-    # Prepare a message body
     message = integrations.nice_email_body(
         username,
         realname,
         status_group,
-        time.strftime("%H:%M on %m/%d", time.localtime(timestamp))
+        time.strftime("%H:%M on %m/%d", time.localtime(int(time.time())))
     )
-    return subject, message
+    to = [email_addr]
+    bcc = cfg.email.admin_emails
+    if cfg.general.debug_mode:
+        to = cfg.email.admin_emails
+        bcc = ()
+
+    send_email(
+        subject,
+        message,
+        to,
+        bcc,
+        cfg.email.from_email,
+        localhost=True if to and "@localhost" in to else False,
+        reply_to=cfg.email.reply_to
+    )
 
 
-def prepare_high_usage_email(top_users, total_cpu_usage, total_mem_usage,
-                             iso_timestamp):
+def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage):
     """
-    Prepares an email message to notify admins that there is high usage on the
+    Sends an email message to notify admins that there is high usage on the
     node.
 
     top_users: []
@@ -126,11 +175,11 @@ def prepare_high_usage_email(top_users, total_cpu_usage, total_mem_usage,
         The total CPU usage on the machine.
     total_mem_usage: float
         The total memory usage on the machine.
-    iso_timestamp: str
-        A timestamp for the event in ISO format.
     """
     hostname = socket.gethostname()
     subject = integrations.overall_high_usage_subject(hostname)
+    timestamp = int(time.time())
+    iso_timestamp = plots._iso_from_epoch(timestamp)
 
     # Machine data
     total_mem = round(cinfo.bytes_to_gb(cinfo.total_mem))
@@ -154,97 +203,7 @@ def prepare_high_usage_email(top_users, total_cpu_usage, total_mem_usage,
         total_swap_usage,
         top_users
     )
-
-    return subject, message
-
-
-def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage, to,
-                          sender):
-    """
-    Sends a high usage warning email to notify admins that there is high usage
-    on the node that is a result of multiple users rather than a couple/single
-    users.
-
-    top_users: []
-        A list of the top User()s that are using the most of the machine.
-    total_cpu_usage: float
-        The total CPU usage on the machine.
-    total_mem_usage: float
-        The total memory usage on the machine.
-    to: str, list
-        The email addresses of the message recipients.
-    sender: str
-        The sender's email address.
-    """
-    timestamp = int(time.time())
-    iso_timestamp = plots._iso_from_epoch(timestamp)
-    subject, message = prepare_high_usage_email(top_users, total_cpu_usage,
-                                                total_mem_usage, iso_timestamp)
-    send_email(subject, message, to, [], sender)
-
-
-def send_violation_email(subject, message_body, to, bcc, sender,
-                         image_filepath=""):
-    """
-    Sends a violation email message.
-
-    subject: str
-        The subject of the message.
-    message_body: str
-        The body of the message.
-    to: str, list
-        The email addresses of the message recipients.
-    sender: str
-        The sender's email address.
-    image_filepath: str
-        An (optional) image to attach.
-    """
-    if cfg.general.debug_mode:
-        # Add the current options to email messages
-        # Specify variable names to include them in debug_mode emails
-        debug_head = """<h2>Debug information</h2>
-            <p><em>The script is currently not making changes to user quotas or
-                   sending emails to users.</em></p>"""
-        wanted_fields = [
-            ("arbiter_refresh", cfg.general.arbiter_refresh),
-            ("history_per_refresh", cfg.general.history_per_refresh),
-            ("cpu_badness_threshold", cfg.badness.cpu_badness_threshold),
-            ("mem_badness_threshold", cfg.badness.mem_badness_threshold),
-            ("time_to_max_bad", cfg.badness.time_to_max_bad),
-            ("time_to_min_bad", cfg.badness.time_to_min_bad),
-        ]
-        debug_body = "<br>".join([
-            "{}: {}".format(field, value) for field, value in wanted_fields
-        ])
-        message_body = debug_head + debug_body + "<br>" + message_body
-
-    additional_text = ""
-    if cfg.processes.whitelist_other_processes:
-        additional_text = " These processes are whitelisted as defined above."
-    if image_filepath:
-        message_body += ("""
-            <h2>Recent system usage</h2><img src="cid:{}">
-            <p><em>*This process is generally permitted on interactive nodes
-                and is only counted against you when considering memory usage
-                (regardless of the process, too much memory usage is still
-                considered bad; it cannot be throttled like CPU). The process
-                is included in this report to show usage holistically.</em></p>
-            <p><em>**This accounts for the difference between the overall usage
-                and the collected PID usage (which can be less accurate). This
-                may be large if there are a lot of short-lived processes (such
-                as compilers or quick commands) that account for a significant
-                fraction of the total usage.{}</em></p>
-        """).format(image_filepath, additional_text)
-        message_body += "</em></p>"
-
-    send_email(subject,
-               message_body,
-               to,
-               bcc,
-               sender,
-               image_filepath,
-               localhost=True if to and "@localhost" in to else False,
-               reply_to=cfg.email.reply_to)
+    send_email(subject, message, cfg.email.admin_emails, [], cfg.email.from_email)
 
 
 def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
@@ -265,7 +224,9 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
         inserted in the actual body of the text by adding a
         "<img src='cid:name'>".
     localhost: bool
-        Attempts to send mail on the same host.
+        Attempts to send mail to local users on the machine (/var/spool).
+        Requires that all the recipients end with a "@localhost".
+        e.g. "username@localhost"
     reply_to: str
         The reply-to email address to be specified in the headers.
     """
@@ -282,8 +243,8 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
             email.attach(email_image)
             if not cfg.email.keep_plots:
                 os.remove(image_attachment)
-        except (FileNotFoundError, OSError):
-            logger.debug(image_attachment)
+        except OSError as err:
+            logger.debug("%s: %s", image_attachment, err)
             logger.warning("Image could not be found or attached to email.")
 
     text = MIMEText(html_message, "html")
@@ -302,14 +263,17 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
     # Send the message
     if email["bcc"] or email["to"]:
         mail_server = cfg.email.mail_server if not localhost else "localhost"
-        smtp = smtplib.SMTP(mail_server)
-        smtp.send_message(email)
-        smtp.quit()
+        try:
+            with smtplib.SMTP(mail_server) as smtp:
+                smtp.send_message(email)
+        except Exception as err:
+            logger.debug(err)
+            logger.warning("Unable to send message: %s", str(err))
 
 
-def limit_user(cgroup, limit_on, limit, fallback_limit, memsw=False):
+def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
     """
-    Limits a cgroup based on the limit_on (either "cpu" or "mem") and the
+    Limits a user slice based on the limit_on (either "cpu" or "mem") and the
     corresponding limit. If the limit specified fails to be be applied, the
     given fallback limit is then applied (if possible). Note that applying a
     memory limit causes the function to scale the resulting limit between the
@@ -317,8 +281,8 @@ def limit_user(cgroup, limit_on, limit, fallback_limit, memsw=False):
     the given limit as possible. Returns whether the given limit was written
     out (e.g. if mem is scaled, returns False).
 
-    cgroup: SystemdCGroup()
-        A cgroup object that belongs to a specific group.
+    user_slice: cinfo.UserSlice()
+        A user_slice object that belongs to a specific group.
     limit_on: "cpu" or "mem"
         The type of limit.
     limit: int
@@ -329,7 +293,7 @@ def limit_user(cgroup, limit_on, limit, fallback_limit, memsw=False):
     memwsw: bool
         Whether to use memsw if applying a mem limit.
 
-    >>> # Limits memory of the uid 1001 to as much as 50% of the total memory.
+    >>> # Limits memory of the uid 1001 to at least 50% of the total memory.
     >>> limit_user(cinfo.UserSlice(1001), "mem", 50)
     True
     """
@@ -339,20 +303,20 @@ def limit_user(cgroup, limit_on, limit, fallback_limit, memsw=False):
         return False
     try:
         if limit_on == "mem":
-            return _scale_mem_quota(cgroup, limit, fallback_limit,
+            return _scale_mem_quota(user_slice, limit, fallback_limit,
                                     memsw=memsw,
                                     retries=5,
                                     retry_rate=0.1)
         elif limit_on == "cpu":
-            cgroup.set_cpu_quota(limit)
+            user_slice.set_cpu_quota(limit)
             return True
     except FileNotFoundError:
         logger.info("User: disappeared before any limit could be set. User "
                     "%s's database record will not be updated to reflect the "
-                    "change.", cgroup.uid)
-    except OSError as e:
+                    "change.", user_slice.uid)
+    except OSError as err:
         logger.warning("Failed to set a %s limit of %s%% for %s, due to an "
-                       "OSError! %s", limit_on, limit, cgroup.name, e)
+                       "OSError: %s", limit_on, limit, user_slice.name, err)
     return False
 
 
@@ -364,7 +328,7 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
     retry, a period of time is waited. Returns whether the aimed_limit was
     applied.
 
-    cgroup: SystemdCGroup()
+    cgroup: cinfo.SystemdCGroup()
         A cgroup object that belongs to a specific group.
     aimed_limit: int
         The limit to aim for when applying quotas.
@@ -375,6 +339,8 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
         Whether or not to use memsw.
     retries: int
         The number of times to scale the memory to the fallback limit.
+    retry_rate: float
+        The rate at which to wait between retries.
     """
     limit = aimed_limit
     scale = (fallback_limit - aimed_limit) / retries
@@ -387,10 +353,10 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
             cgroup.set_mem_quota(limit, memsw)
             resulting_limit = limit
             break
-        # The limit is too low or the user disappeared
-        except (OSError, FileNotFoundError) as e:
+        # The limit is too low or the cgroup disappeared
+        except OSError as err:
             limit += scale
-            failed_exception = e
+            failed_exception = err
             time.sleep(retry_rate)
             continue
     if resulting_limit == -1:
@@ -429,6 +395,7 @@ def upgrade_penalty(user_slice, status):
     >>> statuses.get_status(1001)  # Now they are in penalty2
     ["penalty2", "normal", 1, 1534261840]
     """
+    uid = user_slice.uid
     penalties = cfg.status.penalty.order
     new_occurrences = min(status.occurrences + 1, len(penalties))
     penalty_group = penalties[new_occurrences - 1]
@@ -437,28 +404,34 @@ def upgrade_penalty(user_slice, status):
     if new_occurrences != status.occurrences:  # Cap occurrences to max penalty
         delta_occur = 1
     update_status(user_slice, penalty_group, status.default)
-    if statuses.in_status_file(user_slice.uid):
-        statuses.update_occurrences(user_slice.uid, delta_occur,
-                                    update_timestamp=True)
+    if not statuses.update_occurrences(uid, delta_occur, update_timestamp=True):
+        # This likely means that update_status failed (the database couldn't
+        # be updated), but we could still query whether a user was in the
+        # database (otherwise a exception would be thrown). If this is the
+        # case, we should attempt to manually rollback any notion of the
+        # penalty changing without touching the database.
+        logger.warning("Occurrences couldn't be lowered since the user isn't "
+                       "in the status database!")
+        return status.current  # internal status doesn't change on update_status
     return penalty_group
 
 
-def update_status(user_slice, new_status, default_status):
+def update_status(user_slice, new_status_group, default_status_group):
     """
-    Applies the new_status to the user. If a status group is defined as a
+    Applies the new status group to the user. If a status group is defined as a
     penalty group, applies the quota relative to their default status if
     specified in the config. The user is removed from the status database if
     they are in their default status with 0 occurrences.
 
     user_slice: cinfo.UserSlice()
         The user's cgroup object.
-    new_status: str
-        The new status to apply to the user.
-    default_status: str
-        The user's default status.
+    new_status_group: str
+        The new status group to apply to the user.
+    default_status_group: str
+        The user's default status group.
     """
-    cpu_quota, mem_quota = statuses.lookup_quotas(user_slice.uid, new_status)
-    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(user_slice.uid, default_status)
+    cpu_quota, mem_quota = statuses.lookup_quotas(user_slice.uid, new_status_group)
+    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(user_slice.uid, default_status_group)
     cpu_thread = threading.Thread(target=limit_user,
                                   args=(user_slice, "cpu", cpu_quota,
                                         default_cpu_quota))
@@ -469,59 +442,44 @@ def update_status(user_slice, new_status, default_status):
     mem_thread.start()
 
     # Add the user to the status database
-    statuses.add_user(user_slice.uid, new_status, default_status)
+    statuses.add_user(user_slice.uid, new_status_group, default_status_group)
 
     new_statuses = statuses.get_status(user_slice.uid)
     curr_occurrences = new_statuses[2]
-    in_default_status = new_status == default_status
+    in_default_status = new_status_group == default_status_group
 
     if curr_occurrences == 0 and in_default_status:
         # Remove user from database
         statuses.remove_user(user_slice.uid)
 
 
-def user_nice_email(user, new_status):
+def user_nice_email(user, new_status_group):
     """
     Sends a nice email to the user indicating that they have been released
     from penalty.
+
+    user: user.User()
+        The user to send the email to.
+    new_status_group: str
+        The new status group to that has been applied to the user.
     """
     metadata = integrations.get_user_metadata(user.uid)
-    # Prepare an all-clear message if the user is good
-    subject, message = prepare_nice_email(
-        user.uid,
-        metadata.username,
-        metadata.realname,
-        new_status,
-        socket.gethostname(),
-        int(time.time())
-    )
-    to = [metadata.email_addr]
-    bcc = cfg.email.admin_emails
-
-    # Don't send the email to the user if debug mode is enabled
-    if cfg.general.debug_mode:
-        to = cfg.email.admin_emails
-        bcc = ()
-
-    send_email(
-        subject,
-        message,
-        to,
-        bcc,
-        cfg.email.from_email,
-        localhost=True if to and "@localhost" in to else False,
-        reply_to=cfg.email.reply_to
-    )
+    send_nice_email(user, metadata, new_status_group)
 
 
-def user_warning_email(user, new_status):
+def user_warning_email(user, new_status_group):
     """
     Warns the user about their policy violations in a email.
+
+    user: user.User()
+        The user to send the email to.
+    new_status_group: str
+        The new status group to that has been applied to the user.
     """
     metadata = integrations.get_user_metadata(user.uid)
     username = metadata.username
     # Get the expression to be used to describe the penalty status
-    severity_expression = statuses.lookup_status_prop(new_status).expression
+    severity_expression = statuses.lookup_status_prop(new_status_group).expression
 
     # Get the user's baseline status
     default_status_group = statuses.lookup_default_status_group(user.uid)
@@ -546,38 +504,45 @@ def user_warning_email(user, new_status):
         cfg.email.plot_suffix
     ])) + ".png"
     # Generate plot
-    gen_plot(plot_filepath, username, top_events, hist, mem_quota_gb,
-             cpu_quota)
+    generate_plot(plot_filepath, username, top_events, hist, cpu_quota,
+                  mem_quota_gb)
 
     email_table = generate_table(top_events, cpu_quota, mem_quota_gb)
-    # Prepare the email
-    subject, message = prepare_warning_email(
-        user.uid,
-        username,
-        metadata.realname,
-        new_status,
-        socket.gethostname(),
+    send_warning_email(
+        user,
+        metadata,
+        new_status_group,
         email_table,
         user.badness_timestamp,
-        severity=severity_expression
+        severity_expression,
+        plot_filepath
     )
-    to = [metadata.email_addr]
-    bcc = cfg.email.admin_emails
-
-    # Don't send the email to the user if debug mode is enabled
-    if cfg.general.debug_mode:
-        to = cfg.email.admin_emails
-        bcc = []
-
-    send_violation_email(subject, message, to, bcc, cfg.email.from_email,
-                         plot_filepath)
 
 
-def gen_plot(plot_filepath, username, proc_events, history, mem_quota_gb,
-             cpu_quota):
+def generate_plot(plot_filepath, username, proc_events, history, cpu_quota,
+                  mem_quota_gb):
     """
     Generates a process usage plot image in the location specified in the
     config.
+
+    plot_filepath: str
+        A path to the plot.
+    username:
+        The username of the user.
+    proc_events: {}
+        A dictionary of events; the value is a list of processes that are
+        associated with that time event.
+    history: collections.deque(dict, )
+        A list of history events ordered chronologically (i.e. most recent is
+        first). History events are formatted as:
+            {"time": float,
+             "mem": float,
+             "cpu": float,
+             "pids": {int (pid): pidinfo.StaticProcess()}}
+    cpu_quota: float
+        The cpu quota.
+    mem_quota_gb: float
+        The memory quota in gigabytes.
     """
     # cgroup data usage
     timestamps = [event["time"] for event in history]
@@ -590,92 +555,18 @@ def gen_plot(plot_filepath, username, proc_events, history, mem_quota_gb,
         username,
         proc_events,
         general_events,
-        mem_quota_gb * 1.2,  # Show some extra space above the quota
-        cpu_quota * 1.2,
+        mem_quota_gb,
+        cpu_quota,
         cfg.badness.mem_badness_threshold * mem_quota_gb,
         cfg.badness.cpu_badness_threshold * cpu_quota
     )
 
 
-def history_mem_to_gb(history):
+def generate_table(events, cpu_quota, mem_quota_gb, cutoff=12):
     """
-    Returns a new history item with the process and memory data converted to
-    GB, rather than a pct.
-    """
-    new_hist = copy.deepcopy(history)
-    for event in new_hist:
-        event["mem"] = cinfo.pct_to_gb(event["mem"])
-        for process in event["pids"].values():
-            process.usage["mem"] = cinfo.pct_to_gb(process.usage["mem"])
-    return new_hist
+    Generates an HTML table from all the processes in the events.
 
-
-def _get_top_processes(sorted_events, cpu_quota, mem_quota_gb, cutoff=None):
-    """
-    Returns a list of the top processes from the sorted relevant events.
-
-    sorted_events: {int: [StaticProcess(), ], }
-        A dictionary of lists of StaticProcess()s, indexed by their event
-        timestamp.
-    cpu_quota: float
-        The cpu quota.
-    mem_quota: float
-        The memory quota.
-    cutoff: int, None
-        The number of top processes per event desired.
-    """
-    ProcUsage = collections.namedtuple("ProcUsage", "name cpu_usage mem_usage")
-    quotas = {"cpu": cpu_quota, "mem": mem_quota_gb}
-    proc_overall_usage = collections.defaultdict(
-        lambda: {"mem": 0, "cpu": 0, "n": 0}
-    )
-
-    # Combine process usage based on a process name
-    for processes in sorted_events.values():
-        procs_in_this_event = collections.defaultdict(
-            lambda: {"mem": 0, "cpu": 0}
-        )
-        for process in processes:
-            for metric, usage in process.usage.items():
-                procs_in_this_event[process.name][metric] += usage
-
-        # Increase the count of events a process is in
-        for proc_name in procs_in_this_event:
-            proc_overall_usage[proc_name]["n"] += 1
-
-        for proc_name, usages in procs_in_this_event.items():
-            for metric, usage in usages.items():
-                proc_overall_usage[proc_name][metric] += usage
-
-    # Get the average usage values over all the events
-    avg_proc_overall_usage = collections.defaultdict(
-        lambda: {"mem": 0, "cpu": 0}
-    )
-    for proc_name, proc_usages in proc_overall_usage.items():
-        n = proc_overall_usage[proc_name].pop("n", 1)
-        for metric, usage in proc_usages.items():
-            avg_proc_overall_usage[proc_name][metric] = usage / n
-
-    top_processes = sorted(
-        avg_proc_overall_usage,
-        key=lambda proc_name: sum(
-            value / quotas[metric]  # Based on how close to a quota
-            for metric, value in avg_proc_overall_usage[proc_name].items()
-        ),
-        reverse=True
-    )[:cutoff]
-    return [ProcUsage(
-        process,
-        avg_proc_overall_usage[process]["cpu"],
-        avg_proc_overall_usage[process]["mem"]
-    ) for process in top_processes]
-
-
-def generate_table(sorted_events, cpu_quota, mem_quota_gb):
-    """
-    Generates an HTML table from all the processes in the sorted_events.
-
-    sorted_events: {int: [StaticProcess(), ], }
+    events: {int: [StaticProcess(), ], }
         A dictionary of lists of StaticProcess()s, indexed by their event
         timestamp.
     cpu_quota: float
@@ -683,9 +574,6 @@ def generate_table(sorted_events, cpu_quota, mem_quota_gb):
     mem_quota_gb: float
         The memory quota in gigabytes.
     """
-    top_procs = _get_top_processes(sorted_events, cpu_quota, mem_quota_gb, cutoff=15)
-
-    # Generate a table to put in emails
     table = ("""
         <table>
             <tr>
@@ -695,18 +583,64 @@ def generate_table(sorted_events, cpu_quota, mem_quota_gb):
             </tr>
     """)
 
-    for proc in top_procs:
+    for proc in avg_procs_over_events(events, cpu_quota, mem_quota_gb)[:cutoff]:
         table += ("""
             <tr>
                 <td>{}</td>
                 <td>{:0.2f}</td>
                 <td>{:0.2f}</td>
             </tr>
-        """).format(proc.name, proc.cpu_usage, proc.mem_usage)
+        """).format(proc.name, proc.usage["cpu"], proc.usage["mem"])
     return table + "</table>"
 
 
-def combine_processes(processes):
+def history_mem_to_gb(history):
+    """
+    Returns a new history item with the process and memory data converted to
+    GB, rather than a pct.
+
+    history: collections.deque(dict, )
+        A list of history events ordered chronologically (i.e. most recent is
+        first). History events are formatted as:
+            {"time": float,
+             "mem": float,
+             "cpu": float,
+             "pids": {int (pid): pidinfo.StaticProcess()}}
+    """
+    new_hist = copy.deepcopy(history)
+    for event in new_hist:
+        event["mem"] = cinfo.pct_to_gb(event["mem"])
+        for process in event["pids"].values():
+            process.usage["mem"] = cinfo.pct_to_gb(process.usage["mem"])
+    return new_hist
+
+
+def avg_procs_over_events(events, cpu_quota, mem_quota_gb):
+    """
+    Returns a list of the top StaticProcess()s from the events.
+
+    events: {int: [StaticProcess(), ], }
+        A dictionary of lists of StaticProcess()s, indexed by their event
+        timestamp.
+    cpu_quota: float
+        The cpu quota.
+    mem_quota: float
+        The memory quota.
+    """
+    summed_procs_by_event = list(
+        itertools.chain(*map(combo_procs_by_name, events.values()))
+    )
+    summed_procs = combo_procs_by_name(summed_procs_by_event)
+    avg_procs = [proc / proc.count for proc in summed_procs]
+    return usage.rel_sorted(
+        avg_procs,
+        cpu_quota, mem_quota_gb,
+        key=lambda proc: (proc.usage["mem"], proc.usage["cpu"]),
+        reverse=True
+    )
+
+
+def combo_procs_by_name(processes):
     """
     Combines the given processes together into new StaticProcess()s if they
     have the same name. Returns a iterable of processes.
@@ -717,7 +651,7 @@ def combine_processes(processes):
     new_processes = collections.defaultdict(lambda: 0)
     for process in processes:
         new_processes[process.name] += process
-    return new_processes.values()
+    return iter(new_processes.values())
 
 
 def add_process_count(events):
@@ -733,7 +667,7 @@ def add_process_count(events):
     # Get max and min
     inf = float("inf")
     process_extrema = collections.defaultdict(lambda: (inf, -inf))
-    for processes in map(combine_processes, events.values()):
+    for processes in map(combo_procs_by_name, events.values()):
         for process in processes:
             min_count, max_count = process_extrema[process.name]
             process_extrema[process.name] = (

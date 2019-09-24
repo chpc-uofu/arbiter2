@@ -5,24 +5,48 @@ can be used to collect, store and process information. These objects follow the
 following philosophy:
 
 The collection of usage metrics is done by creating a Instance(), which stores
-instaneous values upon creation. This Instance() should then be able to be
+instantaneous values upon creation. This Instance() should then be able to be
 divided by another Instance() (by overriding __truediv__) to create a Static()
-object, which takes the two instaneous values and merges them together into
+object, which takes the two instantaneous values and merges them together into
 human readable usage values. This Static() object should be able to do
-appropriate arithmetic with another Static() object (partially using the
-Usage() arithmatic). In order to facilitate later use of a object (e.g. getting
-the uptime of a process, or setting quotas of a cgroup), Instance() objects
-should inherit from a object that contains methods and properties to facilitate
-this. This object should inherit from Usage(). Thus, the inheritance should
-follow this pattern (left to right):
+appropriate arithmetic with another Static() object (by inheriting from the
+Usage() object). In order to facilitate later use of a object (e.g. getting
+the uptime of a process, or setting quotas of a cgroup), Instance() and
+Static() objects should inherit from a object that contains methods and
+properties to facilitate this. Thus, the inheritance should follow this
+pattern:
 
-Usage() -> Static_Facilitator_() -> _Facilitator_() -> _Facilitator_Instance()
+                            _Facilitator_()
+                                   ^
+                                   |       Usage()
+                               ____|____      ^
+                               |       |      |
+           _Facilitator_Instance()   Static_Facilitator_()
 
 The _Facilitator_() should be named appropriately (e.g. Process()).
+
+Design Choices:
+The process of creating a Instance() object and dividing into a Static()
+object comes from the fact that when collecting usage information in Linux,
+things like CPU usage cannot be directly collected. For the CPU usage example,
+the information given is cputime, which must be compared to the cputime at
+another point in time in order to calculate the % of usage a user was using
+during that time period. This design makes this possible and is a little
+cleaner than other designs that have been done (though it isn't perfect).
 
 Other Notes:
 Instance() objects may/should throw exceptions if information cannot be
 collected in __init__. The _Facilitator_() should only do this if necessary.
+
+Unless the __init__() args of child Static() objs are the same, it is
+recommended that __init__() passes **kwargs to it's Static() obj parent.
+With this, eventually the kwargs will be passed into the Usage() obj, which
+will set kwargs as object variables. One reason for doing things this way is
+that it allows for using a parent's operators in child operators, because
+parents can construct child objects using it's own knowledge, but still set
+child properties through kwargs. This is different from the traditional
+approach of overriding the all of operators and not using the parent's
+operators.
 """
 
 metrics = {"cpu": 0, "mem": 0}
@@ -151,3 +175,32 @@ def average(*statics, by=None):
         What to average by. If None, defaults to the length of the usages.
     """
     return sum(statics) / (by if by else len(statics))
+
+
+def rel_sorted(iterable, *quotas, key=None, reverse=False):
+    """
+    Exactly like sorted(), except the sorting is relative to how close the
+    usage is to a quota. The key specifies a function of one argument that is
+    used to extract the usage corresponding to the given quotas (in the same
+    order).
+
+    >>> get_quotas = lambda u: u.cpu_usage, u.mem_usage
+    >>> rel_sorted(users, cpu_quota, mem_quota, key=get_quotas)
+    [user, ..., ...]
+    """
+    rel_usage_key = lambda i: _rel_usage(i, *quotas, key=key)
+    return sorted(
+        iterable,
+        key=rel_usage_key,
+        reverse=reverse
+    )
+
+
+def _rel_usage(item, *quotas, key=None):
+    iter_quotas = iter(quotas)
+    usages = key(item) if key else item
+    try:
+        iter(usages)
+    except TypeError:
+        usages = [usages]  # Just in case only one usage is provided
+    return sum(usage / next(iter_quotas) for usage in usages)

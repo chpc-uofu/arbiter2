@@ -31,11 +31,15 @@ if [[ ! $ID -ge 1000 ]]; then die "UID of $1 is not >= 1000."; fi
 # Verify that there are processes owned by user $1 that we can act on.
 ps -u $1 >/dev/null 2>&1 || die "$1 has no running processes for us to act on."
 
+# This should be the default location for systemd based systems
+CGDIR=/sys/fs/cgroup
+
 # Now find all PIDs for user $1 and move them into 'cpuacct,cpu' and 'memory' cgroups for user's UID.
-for i in `ps auxwww |grep ^$1 |awk '{print $2}'`; do
-  echo "Moving pid:$i into 'cpu,cpuacct' and 'memory' cgroups for user $1:$ID"
-  echo $i >/cgroup/cpu,cpuacct/user.slice/user-${ID}.slice/tasks
-  echo $i >/cgroup/memory/user.slice/user-${ID}.slice/tasks
-  cat /proc/$i/cgroup |grep -e "memory" -e "cpuacct,cpu"
+for pid in `ps axo user:32,pid |grep ^$1 |awk '{print $2}'`; do
+  echo "Moving pid:$pid into 'cpu,cpuacct', 'memory' and 'systemd' cgroups for user $1:$ID"
+  echo $pid >$CGDIR/cpu,cpuacct/user.slice/user-${ID}.slice/cgroup.procs
+  echo $pid >$CGDIR/memory/user.slice/user-${ID}.slice/cgroup.procs
+  echo $pid >$CGDIR/systemd/user.slice/user-${ID}.slice/cgroup.procs
+  grep -e "memory" -e "cpuacct" -e "systemd" /proc/$pid/cgroup
   echo
 done

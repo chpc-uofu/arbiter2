@@ -114,26 +114,28 @@ def arguments():
 def insert(context):
     """
     Inserts a path to into the python path.
+
+    context: str
+        The path to insert into the python path.
     """
     context_path = os.path.dirname(__file__)
     sys.path.insert(0, os.path.abspath(os.path.join(context_path, context)))
 
 
-def setup_configs(configs):
+def setup_config(config_files):
     """
     Loads the given configs. If there is a problem, exits with a error code of
     2.
+
+    config_files: iter
+        A iterable of configuration files to load.
     """
-    startup_logger.info("Importing configuration...")
+    startup_logger.info("Importing and validating configuration...")
     try:
-        config = cfgparser.combine_toml(*configs)
-        startup_logger.info("Validating configuration...")
-        if not cfgparser.check_config(config):
+        if not cfgparser.load_config(*config_files):
             startup_logger.error("There was a problem with the configuration. "
                                  "Please check above.")
             sys.exit(2)
-        else:
-            cfgparser.cfg.add_subconfig(config)
     except (TypeError, toml.decoder.TomlDecodeError) as err:
         startup_logger.error("Configuration error: %s", str(err))
         sys.exit(2)
@@ -190,17 +192,18 @@ def pre_run(args):
     Makes preparations before main.run() is ran.
     """
     # Load the config
-    setup_configs(args.configs)
+    setup_config(args.configs)
 
     # Setup logging (based on the config)
-    setup_logging(args, cfgparser.cfg, cfgparser.shared)
+    cfg = cfgparser.cfg
+    setup_logging(args, cfg, cfgparser.shared)
 
     # Turn on accounting
     if args.acct_uid:
         startup_logger.info("Attempting to turn on accounting...")
         try:
             success = permissions.turn_on_cgroups_acct(args.acct_uid)
-        except FileNotFoundError as err:
+        except OSError as err:
             logger.debug(err)
             success = False
         if not success:
@@ -208,26 +211,46 @@ def pre_run(args):
             sys.exit(2)
 
     # Make sure cgroup hierarchy already exists
-    else:
-        controllers = ("cpu", "memory")
-        uids = []
-        while not uids:
-            uids = [
-                uid for uid in cinfo.wait_till_uids()
-                if cinfo.passwd_entry(uid)   # No passwd entry -> not in hierarchy
-            ]
-        new_slice = cinfo.UserSlice(uids[0])
-        if not all(map(new_slice.controller_exists, controllers)):
-            startup_logger.error("cgroup hierarchy doesn't exist (it can be "
-                                 "turned on via the -a flag). Exiting.")
-            sys.exit(2)
+    elif not cinfo.safe_check_on_any_uid(acct_on_for):
+        startup_logger.error("cgroup hierarchy doesn't exist (it can be "
+                             "turned on via the -a flag). Exiting.")
+        sys.exit(2)
 
     # Check permissions
     startup_logger.info("Checking if arbiter has proper permissions...")
-    if not permissions.check_permissions(args.sudo_permissions, cfgparser.cfg):
+    has_permissions = permissions.check_permissions(
+        args.sudo_permissions,
+        cfg.general.debug_mode,
+        cfg.processes.pss,
+        cfg.processes.memsw,
+        groupname=cfg.self.groupname,
+        min_uid=cfg.general.min_uid
+    )
+    if not has_permissions:
         startup_logger.error("Arbiter does not have sufficient permissions "
                              "to continue. Exiting.")
         sys.exit(2)
+
+
+def acct_on_for(uid, controllers=("memory", "cpu")):
+    """
+    Returns whether accounting is on for a user.
+
+    uid: int
+        The uid of the user slice cgroup to check.
+    controllers: iter
+        The cgroup controllers to check.
+    """
+    cgroup = cinfo.UserSlice(uid)
+    acct_on = all(map(cgroup.controller_exists, controllers))
+
+    # The systemd controller should always exist, if it doesn't the user isn't
+    # on the machine. We use this to assert that the checks above aren't
+    # failing because the user has logged out, rather than just the acct not
+    # being on
+    if not acct_on and not cgroup.controller_exists("systemd"):
+        raise FileNotFoundError("The user disappeared!")
+    return acct_on
 
 
 if __name__ == "__main__":

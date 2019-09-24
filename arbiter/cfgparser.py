@@ -314,6 +314,12 @@ base_validation_config = {
             file_exists,
             default_value=""
         ),
+        "proc_owner_whitelist": ValidationProtocol(
+            list,
+            all_are_int,
+            uids_exist,
+            default_value=[0]
+        )
     },
     "status": {
         "order": ValidationProtocol(list, nonzerolen, all_are_str),
@@ -387,10 +393,6 @@ def check_config(config, pedantic=True):
     if not valid_sections(config):
         return False
 
-    # Put in default values if missing
-    place_optional_values(config)
-    place_special_vars(config)
-
     # Make sure all needed values are there
     if not has_req_values(config):
         return False
@@ -399,6 +401,81 @@ def check_config(config, pedantic=True):
     if not valid_config_values(config, pedantic=pedantic):
         return False
     return True
+
+
+def place_optional_values(config, validation_config=base_validation_config):
+    """
+    Places optional values in the config if they are not overriden.
+
+    config: dict
+        The dictionary to change.
+    validation_config: dict
+        The dictionary to get values from; values in the dict must be either a
+        sub config, or be a ValidationProtocol.
+    """
+    for key, value, context in context_iter(validation_config):
+        if value.default_value is not None:
+            try:
+                inner_config = context_inner_dict(config, context)
+            except KeyError as err:
+                continue
+            if key not in inner_config:
+                inner_config[key] = value.default_value
+
+    # Do it for the status groups
+    for key, value, context in context_iter(copy.deepcopy(config)):
+        if "penalty" in context and len(context) == 3:
+            # New Penalty Group
+            place_optional_values(context_inner_dict(config, context), penalty_validation)
+        elif "status" in context and "penalty" not in context and len(context) == 2:
+            # New Status Group
+            place_optional_values(context_inner_dict(config, context), status_validation)
+
+
+def place_special_vars(config):
+    """
+    Places special variables in the config.
+
+    config: dict
+        The dictionary to change.
+    """
+    for key, value, context in context_iter(config.copy()):
+        for var, repl_func in special_vars.items():
+            if isinstance(value, str):
+                for match in re.finditer(var, value):
+                    context_insert(
+                        re.sub(var, repl_func(match.group(1)), value),
+                        config,
+                        context + [key]
+                    )
+
+
+def has_req_values(config, validation_config=base_validation_config):
+    """
+    Makes sure all the required key, values are in the config.
+
+    config: dict
+        The dictionary checked.
+    validation_config: dict
+        The dictionary to check against; values in the dict must be either a
+        sub config, or be a ValidationProtocol.
+    """
+    # Make all values None
+    blank_config = copy.deepcopy(validation_config)
+    for key, value, context in context_iter(blank_config):
+        inner_config = context_inner_dict(blank_config, context)
+        inner_config[key] = None
+
+    # Replace all known values (leaves None values in place if not in config)
+    test_config = merge_dicts(blank_config, copy.deepcopy(config))
+
+    # Check for None values, they are missing variables.
+    isvalid = True
+    for key, value, context in context_iter(test_config):
+        if value is None:
+            logger.error("Missing variable '%s.%s'.", ".".join(context), key)
+            isvalid = False
+    return isvalid
 
 
 def valid_sections(config, validation_config=base_validation_config):
@@ -415,85 +492,6 @@ def valid_sections(config, validation_config=base_validation_config):
     for key in validation_config.keys():
         if key not in config:
             logger.error("Missing section %s.", key)
-            isvalid = False
-    return isvalid
-
-
-def place_optional_values(config, validation_config=base_validation_config,
-                          ignore_missing_sections=False):
-    """
-    Places optional values in the config if they are not overriden.
-
-    config: dict
-        The dictionary to change.
-    validation_config: dict
-        The dictionary to get values from; values in the dict must be either a
-        sub config, or be a ValidationProtocol.
-    """
-    for key, value, context in iter_config(validation_config):
-        if value.default_value is not None:
-            try:
-                inner_config = inner_dict(context, config)
-            except KeyError as err:
-                if ignore_missing_sections:
-                    continue
-                else:
-                    raise err
-            if key not in inner_config:
-                inner_config[key] = value.default_value
-
-    # Do it for the status groups
-    for key, value, context in iter_config(copy.deepcopy(config)):
-        if "penalty" in context and len(context) == 3:
-            # New Penalty Group
-            place_optional_values(inner_dict(context, config), penalty_validation)
-        elif "status" in context and "penalty" not in context and len(context) == 2:
-            # New Status Group
-            place_optional_values(inner_dict(context, config), status_validation)
-
-
-def place_special_vars(config):
-    """
-    Places special variables in the config.
-
-    config: dict
-        The dictionary to change.
-    """
-    for key, value, context in iter_config(config.copy()):
-        for var, repl_func in special_vars.items():
-            if isinstance(value, str):
-                for match in re.finditer(var, value):
-                    context_insert(
-                        context + [key],
-                        re.sub(var, repl_func(match.group(1)), value),
-                        config
-                    )
-
-
-def has_req_values(config, validation_config=base_validation_config):
-    """
-    Makes sure all the required key, values are in the config.
-
-    config: dict
-        The dictionary checked.
-    validation_config: dict
-        The dictionary to check against; values in the dict must be either a
-        sub config, or be a ValidationProtocol.
-    """
-    # Make all values None
-    blank_config = copy.deepcopy(validation_config)
-    for key, value, context in iter_config(blank_config):
-        inner_config = inner_dict(context, blank_config)
-        inner_config[key] = None
-
-    # Replace all known values (leaves None values in place if not in config)
-    test_config = merge_dicts(blank_config, copy.deepcopy(config))
-
-    # Check for None values, they are missing variables.
-    isvalid = True
-    for key, value, context in iter_config(test_config):
-        if value is None:
-            logger.error("Missing variable '%s.%s'.", ".".join(context), key)
             isvalid = False
     return isvalid
 
@@ -595,56 +593,56 @@ def valid_value(validation_config, key, value, context, pedantic=True):
     return True
 
 
-def iter_config(config, context=[]):
+def context_iter(dictionary, context=[]):
     """
-    Iterates through the config, returning the current key, value and a list
-    of parent keys.
+    Iterates through the dictionary, returning the current key, value and a
+    list of parent keys.
 
-    config: dict
-        The dictionary checked.
+    dictionary: dict
+        A dictionary to iterate over.
     context: [str, ]
         A list of strings corresponding to the keys that were used to get to
         the current config dictionary.
     """
-    for key, value in config.items():
+    for key, value in dictionary.items():
         if isinstance(value, dict):
-            yield from iter_config(value, context + [key])
+            yield from context_iter(value, context + [key])
         else:
             yield key, value, context
 
 
-def inner_dict(keys, dictionary):
+def context_inner_dict(dictionary, context):
     """
-    Returns a inner dict from the given dict from a list of keys.
+    Returns a inner dictionary from the given dictionary from the context
+    keys.
 
-    keys: [str, ]
-        A list of strings corresponding to the keys that were used to get to
-        the desired dictionary.
     dictionary: dict
         A dictionary to get the value from.
+    context: [str, ]
+        A list of strings corresponding to the keys that were used to get to
+        the desired dictionary.
     """
     innerdict = dictionary
-    for child in keys:
+    for child in context:
         innerdict = innerdict[child]
     return innerdict
 
 
-def context_insert(context, item, dictionary):
+def context_insert(item, dictionary, context):
     """
-    Modifies the inner dictionary found by the context's keys. The context is
-    destroyed in the process.
+    Modifies the inner dictionary found by the context's keys.
 
-    context: [str, ]
-        A list of strings corresponding to the keys that were used to get to
-        the current config dictionary.
     item: object
         The item to insert.
     dictionary: dict
         A dictionary to set the value of.
+    context: [str, ]
+        A list of strings corresponding to the keys that were used to get to
+        the current config dictionary.
     """
     key = context.pop(0)
     if context:
-        context_insert(context, item, dictionary[key])
+        context_insert(item, dictionary[key], context)
     else:
         dictionary[key] = item
 
@@ -679,6 +677,27 @@ def combine_toml(*files):
     for config in files[1:]:
         resulting_config = merge_dicts(resulting_config, toml.load(config))
     return resulting_config
+
+
+def load_config(*config_files, check=True, pedantic=True):
+    """
+    Attempts to load the given configuration files into cfg and returns
+    whether it was successful in doing so. May raise TypeError or
+    toml.decoder.TomlDecodeError.
+
+    config_files: str
+        A series of paths to configuration files (toml).
+    check: bool
+        Whether or not to check the configuration for problems.
+    """
+    config = combine_toml(*config_files)
+    place_optional_values(config)
+    place_special_vars(config)
+    if check and not check_config(config, pedantic=pedantic):
+        return False
+
+    cfg.add_subconfig(config)
+    return True
 
 
 def arguments():
@@ -725,10 +744,10 @@ if __name__ == "__main__":
     resulting_config = combine_toml(*args.configs)
     if args.print:
         if not args.hide_defaults:
-            place_optional_values(resulting_config, ignore_missing_sections=True)
+            place_optional_values(resulting_config)
         if args.eval_specials:
             place_special_vars(resulting_config)
         print(toml.dumps(resulting_config))
-    elif check_config(resulting_config, pedantic=args.pedantic) is not True:
+    elif load_config(*args.configs, pedantic=args.pedantic) is not True:
         sys.exit(2)
 

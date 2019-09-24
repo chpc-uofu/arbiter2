@@ -3,6 +3,7 @@ import logging
 import time
 import cinfo
 import os
+import pwd
 
 startup_logger = logging.getLogger("arbiter_startup")
 base_path = "/sys/fs/cgroup/{}/user.slice/user-{}.slice/{}"
@@ -15,15 +16,14 @@ memsw_write_files = [
 ]
 
 
-def has_cgroup_permissions(uid, memsw=True):
+def has_write_permissions(uid, memsw=True):
     """
     Returns whether arbiter has permissions to write to cgroup files.
 
     uid: int
         The uid of the user.
     memsw: bool
-        Whether or not to check for permissions on memsw files (they do not
-        exist in systemd cgroups hybrid mode)
+        Whether or not to check for permissions on memsw files.
     """
     # Don't include memsw files if turned off
     to_check = req_write_files + (memsw_write_files if memsw else [])
@@ -49,82 +49,52 @@ def has_pss_permissions(pid=1):
         return False
 
 
-def check_permissions(sudo_permissions, cfg):
+def check_permissions(sudoers, debug_mode, pss, memsw, groupname="arbiter", min_uid=0):
     """
     Checks whether arbiter has sufficient permissions to run.
     """
+    write_perm = lambda u: has_write_permissions(u, memsw)
+    sudoers_chown_perm = lambda u: set_file_permissions(u, groupname, memsw)
+
     sufficient = True
-    # Check pss
-    if cfg.processes.pss and not has_pss_permissions():
+    if pss and not has_pss_permissions():
         startup_logger.error(
             "Arbiter does not have sufficient permissions to read "
             "/proc/<pid>/smaps (requires root or CAP_SYS_PTRACE "
             "capabilities) with pss = true"
         )
-        sufficient &= False
+        sufficient = False
 
     # Skip cgroup permission tests if in debug mode (no limiting)
-    if cfg.general.debug_mode:
+    if debug_mode:
         return sufficient
 
-    # Wait until there are users in the cgroup hierarchy (we'll check a user)
-    uids = []
-    attempts = 0
-    while not uids and attempts < 5:
-        uids = [
-            uid for uid in cinfo.wait_till_uids(min_uid=cfg.general.min_uid)
-            # Users without passwd entry aren't in cgroup hierarchy, causing
-            # permission checks to erroneously fail
-            if cinfo.passwd_entry(uid)
-        ]
-        # Users may disappear while checking permissions, repeat for online
-        # users until we find one that doesn't disappear on us.
-        for uid in uids:
-            try:
-                sufficient &= check_permissions_with(uid, sudo_permissions, cfg)
-                return sufficient
-            except FileNotFoundError:
-                logger.debug("Failed to check permissions on %s due to the "
-                             "user disappearing. Trying another active user.",
-                             uid)
-                continue
-        time.sleep(0.5)
-        attempts += 1
-
-
-def check_permissions_with(uid, sudo_permissions, cfg):
-    """
-    Attempts to check permission checks using a specific uid. If the user
-    disappears during the checks, a FileNotFoundError is thrown.
-
-    uid: int
-        The uid of a user.
-    """
-    groupname = cfg.self.groupname
-    memsw = cfg.processes.memsw
-    user_slice = cinfo.UserSlice(uid)
-    # Check if can write to required files
-    if sudo_permissions:
-        try:
-            # Raises FileNotFoundError if disappears
-            set_file_permissions(uid, groupname, memsw)
-        except subprocess.CalledProcessError as err:
-            startup_logger.error(err)
+    if sudoers:
+        # Adminstrators may want to completely ignore users below a threshold
+        # (e.g. below 1000 to ignore service users) to prevent allow arbiter
+        # from  tracking or limiting them. As a result, the sudoers file may
+        # not have entries to allow changing ownership of cgroup files for
+        # these users, so we shouldn't check them here.
+        if not cinfo.safe_check_on_any_uid(sudoers_chown_perm, min_uid=min_uid):
             startup_logger.error(
                 "Arbiter does not have sufficient permissions to use the "
                 "requisite sudo calls for changing permissions on cgroups. "
                 "See the sudoers file."
             )
-            return False
-    elif not has_cgroup_permissions(uids[0], memsw):
-        # Raises FileNotFoundError if disappears, voids has_cgroup_permissions()
-        user_slice.controller_path()
-        # Don't include memsw files if turned off
-        files = req_write_files + (memsw_write_files if memsw else [])
-        startup_logger.error("Failed to set permissions on one of %s", files)
-        return False
-    return True
-
+            sufficient = False
+    elif not cinfo.safe_check_on_any_uid(write_perm):
+        # ^ (See comment and call above), it doesn't matter here since we
+        # aren't using sudoers and we're only looking at the files.
+        write_files = req_write_files + (memsw_write_files if memsw else [])
+        euid = os.geteuid()
+        username = pwd.getpwuid(euid)[0] if cinfo.passwd_entry(euid) else "?"
+        startup_logger.error(
+            "Arbiter does not have sufficient permissions to write out to "
+            "all of the required cgroup files as %s (%s [effective]): %s.",
+            username, euid, write_files
+        )
+        sufficient = False
+    return sufficient
 
 
 def turn_on_cgroups_acct(inactive_uid):
@@ -174,20 +144,31 @@ def set_file_permissions(uid, groupname, memsw=True):
     uid: str, int
         The uid of the user to set file permissions of.
     groupname: str
-        The name of the group to apply permisssions to.
+        The name of the group to apply permissions to.
     files: [str, ]
         A list of files to set permissions on.
     """
     # Don't include memsw files if turned off
     to_set = req_write_files + (memsw_write_files if memsw else [])
-    user_slice = cinfo.UserSlice(uid)
     for controller, filename in to_set:
-        # Raise FileNotFoundError if the user disappears
-        user_slice.controller_path(controller=controller)
         path = base_path.format(controller, uid, filename)
         chgrp = "sudo /bin/chgrp {} {}".format(groupname, path)
-        subprocess.check_call(chgrp.split())
-        user_slice.controller_path(controller=controller)
         chmod = "sudo /bin/chmod {} {}".format("g+w", path)
-        subprocess.check_call(chmod.split())
+        if not run_file_command(chgrp) or not run_file_command(chmod):
+            return False
+    return True
 
+
+def run_file_command(command):
+    """
+    Runs a command that modifies a file and either returns whether that
+    command succeeded or raises a FileNotFoundError if the file doesn't exist.
+    """
+    try:
+        subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
+    except subprocess.CalledProcessError as err:
+        if err.returncode != 0:
+            if err.output and "No such file" in str(err.output):
+                raise FileNotFoundError("No such file or directory")
+            return False
+    return True
