@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 A module containing objects/methods for collecting information.
 """

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 A collection of methods for getting and applying statuses. Statuses files are
 stored in a database at the configured location.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 import matplotlib
 matplotlib.use("Agg")  # Required for server (no displays)
 import matplotlib.pyplot as plt

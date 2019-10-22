@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 Makes decisions on what actions should be made based on a user.User() (Actions
 are "triggered"). These triggers, and the action calls are defined in
@@ -29,6 +30,7 @@ def evaluate(user_obj):
         A user to evaluate.
     """
     uid = user_obj.uid
+    uid_name = user_obj.uid_name
     status = user_obj.status
     username = "{} ({})".format(*integrations._get_name(uid))
     badness = user_obj.badness_history[0]["badness"]
@@ -40,17 +42,17 @@ def evaluate(user_obj):
         timeout = statuses.lookup_status_prop(status.current).timeout
 
     if status.current != status.default:
-        logger.debug("%s has status: %s", uid, status)
+        logger.debug("%s has status: %s", uid_name, status)
 
     # Only evaluate users who are not in penalty
     if not statuses.lookup_is_penalty(status.current):
         if badness_score >= 100:
-            logger.info("Increasing the penalty status of %s", user_obj.uid)
+            logger.info("Increasing the penalty status of %s", uid_name)
             new_status = _upgrade_penalty(user_obj)
             service_logger.info("User %s was put in: %s", username, new_status)
 
         elif _eval_lower_occurrences(badness, status):
-            logger.info("Lowering the occurrences count of %s", uid)
+            logger.info("Lowering the occurrences count of %s", uid_name)
             service_logger.info("User %s penalty occurrences has lowered to: "
                                 "%s", username, status.occurrences - 1)
             if not statuses.update_occurrences(uid, -1, update_timestamp=True):
@@ -59,7 +61,7 @@ def evaluate(user_obj):
 
         # If the user is being bad
         elif badness_score > 0:
-            logger.debug("%s has nonzero badness: %s", uid, badness)
+            logger.debug("%s has nonzero badness: %s", uid_name, badness)
             service_logger.info("User %s has nonzero badness: %s", username,
                                 badness_score)
             whlist_cpu_usage, whlist_mem_usage = user_obj.avg_proc_usage(whitelisted=True)
@@ -74,7 +76,7 @@ def evaluate(user_obj):
     # Lower status for bad users past a certain time
     # TODO (Dylan): Make this applicable to more than just penalty groups
     elif time.time() - int(status.timestamp) >= timeout:
-        logger.info("Decreasing the penalty status of %s", user_obj.uid)
+        logger.info("Decreasing the penalty status of %s", uid_name)
         new_status = _lower_penalty(user_obj)
         service_logger.info("User %s is now in: %s", username, new_status)
 
@@ -82,7 +84,7 @@ def evaluate(user_obj):
     elif timeout != -1:
         timeleft = int(time.time()) - status.timestamp
         logger.debug("%s has spent: %s seconds in penalty of a required %s",
-                     uid, timeleft, timeout)
+                     uid_name, timeleft, timeout)
 
 
 def _eval_lower_occurrences(latest_badness, status):

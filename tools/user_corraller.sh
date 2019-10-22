@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Corrals users' PIDs into their user-$UID.slice. This is useful when Arbiter2
 # is first deployed, since users' PIDs are not moved to their slices when
 # accounting is turned on. New sessions after turning on accounting, however,

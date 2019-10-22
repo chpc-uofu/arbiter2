@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 Logs events and actions that arbiter takes to a database.
 """

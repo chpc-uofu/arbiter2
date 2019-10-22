@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 A module with utilities for storing information related to a specific user.
 """
@@ -7,12 +8,12 @@ import collections
 import logging
 import itertools
 import os
+import pwd
 import usage
 import cinfo
 import statuses
 from cfgparser import cfg, shared
 
-logger = logging.getLogger("arbiter." + __name__)
 
 def get_whitelist(status_group):
     """
@@ -86,9 +87,9 @@ class User:
         The user's memory quota (as a percentage of the entire machine) based
         on their current status.
     """
-    __slots__ = ["uid", "gids", "cgroup", "history", "badness_history",
-                 "badness_timestamp", "status", "cpu_usage", "mem_usage",
-                 "cpu_quota", "mem_quota"]
+    __slots__ = ["uid", "gids", "cgroup", "username", "uid_name", "history",
+                 "badness_history", "badness_timestamp", "status",
+                 "cpu_usage", "mem_usage", "cpu_quota", "mem_quota"]
 
     def __init__(self, uid):
         """
@@ -100,6 +101,12 @@ class User:
         self.uid = uid
         self.gids = statuses.query_gids(self.uid)
         self.cgroup = cinfo.UserSlice(self.uid)
+        self.username = "?"
+        try:
+            self.username = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            pass
+        self.uid_name = "{} ({})".format(self.uid, self.username)
         self.status = statuses.get_status(uid)
         self.history = collections.deque(maxlen=cfg.badness.max_history_kept)
         self.badness_history = collections.deque(maxlen=cfg.badness.max_history_kept)

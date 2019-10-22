@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 
 """
 A module that gets utility information relating to systemd cgroups (Linux

@@ -1,5 +1,33 @@
 # Changelog
 
+## Version 1.3.3
+
+**Changes:**
+
+- License Arbiter with GPLv2!
+- Log out usernames along with uids for easier grepping.
+- Log out that Arbiter2 has started. This makes it easier to see whether Arbiter2 is waiting on permissions checks or just taking a second to collect user usage.
+
+**Upgrading steps (with git):**
+1. git stash
+2. git pull
+3. git stash pop
+4. Restart the arbiter service: `systemctl restart arbiter2`
+
+**Upgrading steps (without git):**
+1. Clone the new update into a new directory
+2. Copy the old configuration file over (if applicable).
+3. Restart the arbiter service: `systemctl restart arbiter2`
+
+**Example:**
+```
+mkdir arbiter2/1.3.3
+git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.3.3
+cp arbiter2/1.3.2/etc/config.toml arbiter2/1.3.3/etc
+ln -s arbiter2/1.3.3 arbiter2/latest
+systemctl restart arbiter2
+```
+
 ## Version 1.3.2
 
 **Bugfixes:**

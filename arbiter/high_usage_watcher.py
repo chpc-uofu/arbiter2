@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 from cfgparser import cfg, shared
 import cinfo
 import logging

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
 # See tools/user_corraller.sh for details. Simply a wrapper around that script
 # that corrals all users on the machine.
 #

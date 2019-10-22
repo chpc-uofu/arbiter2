@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 
 """
 Version 2 of Arbiter; uses cgroups for monitoring and managing behavior.
@@ -86,16 +87,17 @@ def run(args):
         for uid, user_obj in users.copy().items():
             status = user_obj.status
             cgroup = user_obj.cgroup
+            uid_name = user_obj.uid_name
 
             if user_obj.new():
-                logger.debug("%s is new and has status: %s", uid, status)
+                logger.debug("%s is new and has status: %s", uid_name, status)
 
                 # check if their badness hasn't expired
                 if valid_db_badness(uid, db_badness):
                     user_db_badness = db_badness[uid]
                     timestamp = user_db_badness.pop("timestamp")
                     logger.debug("%s's badness are being imported: %s",
-                                 uid, user_db_badness)
+                                 uid_name, user_db_badness)
                     user_obj.set_badness(user_db_badness, timestamp)
 
             if not cfg.general.debug_mode and cgroup.active():
@@ -114,6 +116,8 @@ def run(args):
 
             # Remove inactive users
             elif not cgroup.active() and totally_good and not in_penalty:
+                logger.debug("No longer tracking %s (logged out and had good "
+                             "behavior)", uid_name)
                 collector.delete_user(uid)
 
         # Watch for high usage (overall, not user-specific) on the node
@@ -226,13 +230,14 @@ def set_permissions(user_obj):
         The user object corresponding to a user.
     """
     uid = user_obj.uid
+    uid_name = user_obj.uid_name
     groupname = cfg.self.groupname
     memsw = cfg.processes.memsw
 
     # Set permissions
     if not permissions.has_write_permissions(uid, memsw):
-        warning = "Failed to set file permissions for {}".format(uid)
-        logger.debug("Setting file permissions for %s", uid)
+        warning = "Failed to set file permissions for {}".format(uid_name)
+        logger.debug("Setting file permissions for %s", uid_name)
         try:
             permissions.set_file_permissions(uid, groupname, memsw)
         except subprocess.CalledProcessError:
@@ -269,7 +274,7 @@ def set_quotas(user_obj):
 
     # Apply quotas
     if not eq_cpu_quota or not eq_mem_quota:
-        logger.debug("Applying a limit for %s", uid)
+        logger.debug("Applying limits for %s", uid)
         try:
             actions.update_status(cgroup, status.current, status.default)
         except FileNotFoundError:

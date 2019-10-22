@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """
 A module that defines actions to be taken against users.
 """
@@ -309,6 +310,8 @@ def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
                                     retry_rate=0.1)
         elif limit_on == "cpu":
             user_slice.set_cpu_quota(limit)
+            logger.debug("Successfully set the CPU quota of %s to %.1f%%",
+                         user_slice.uid, limit)
             return True
     except FileNotFoundError:
         logger.info("User: disappeared before any limit could be set. User "
@@ -316,7 +319,7 @@ def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
                     "change.", user_slice.uid)
     except OSError as err:
         logger.warning("Failed to set a %s limit of %s%% for %s, due to an "
-                       "OSError: %s", limit_on, limit, user_slice.name, err)
+                       "OSError: %s", limit_on, limit, user_slice.uid, err)
     return False
 
 

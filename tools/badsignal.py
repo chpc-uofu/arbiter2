@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 # A mini Arbiter2 that reports whether there is badness on the host. The exit
 # code can also be used to determine this. Requires Arbiter2's statusdb to be
 # set up (it is used to determine a user's status).

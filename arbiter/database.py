@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """
 A module used for interfacing with a database (enabling the underlining
 database to be changed). As such, this should be the single point for
