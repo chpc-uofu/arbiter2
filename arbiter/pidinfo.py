@@ -2,6 +2,7 @@
 import os
 import errno
 import math
+import collections
 import re
 import cinfo
 import usage
@@ -11,6 +12,12 @@ A simple module containing classes and methods for managing and storing
 information related to a Linux Process. The classes follow the usage module
 philosophy of Static, non-Static and Instance. See usage.py for details.
 """
+
+# smaps_rollup is a aggregate file of smaps, so it's faster to read. It was
+# added in the 4.14 kernel, so CentOS/RHEL 7 can't take advantage of this, but
+# CentOS/RHEL 8 and newer Ubuntus can.
+# See https://github.com/torvalds/linux/commit/493b0e9d945fa9dfe96be93ae41b4ca4b6fdb317 for more details
+smaps_rollup_exists = os.path.exists("/proc/1/smaps_rollup")
 
 
 class Process():
@@ -143,21 +150,22 @@ class Process():
     def _pss_mem_usage(self, swap=True):
         """
         Returns the current pss (proportional shared size) memory usage in
-        bytes. Using pss reads /proc/<pid>/smaps, which requires CAP_SYS_PTRACE
-        capabilities. A error will be raised if there is not sufficient
-        permissions.
+        bytes. Using pss reads /proc/<pid>/smaps or /proc/<pid>/smaps_rollup,
+        which requires CAP_SYS_PTRACE capabilities. A error will be raised if
+        there is not sufficient permissions.
 
         swap: bool
             Whether to include swapped memory in the usage reported.
         """
-        re_pss = r"Pss:\s+(\d+)\skB\n"
-        re_pss = "^" + re_pss if not swap else re_pss  # ^ prevents SwapPss
-        with open("/proc/{}/smaps".format(self.pid)) as smaps:
-            pss = sum(
+        smaps_file = "smaps_rollup" if smaps_rollup_exists else "smaps"
+        re_pss = r"Pss:\s+(\d+)\skB" if swap else r"\nPss:\s+(\d+)\skB"
+        pss_pattern = re.compile(re_pss)
+        pss = 0
+        with open("/proc/{}/{}".format(self.pid, smaps_file)) as smaps:
+            return sum(
                 int(match.group(1)) if match else 0
-                for match in re.finditer(re_pss, "".join(smaps.readlines()))
+                for match in pss_pattern.finditer(smaps.read())
             ) * 1024  # smaps returns kB
-            return pss
 
     def curr_cputime(self):
         """
@@ -192,6 +200,17 @@ class StaticProcess(usage.Usage, Process):
 
     def __str__(self):
         return "{} ({})".format(self.name, self.pid)
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        """
+        Returns whether the processes are the equal by looking at the names.
+        """
+        if isinstance(self, type(self)):
+            return self.name == other.name
+        return super().__eq__(other)
 
     def __add__(self, other):
         """
@@ -304,3 +323,17 @@ class ProcessInstance(Process):
                 usage=calc_usage
             )
         return super().__truediv__(other)
+
+
+def combo_procs_by_name(procs):
+    """
+    Combines the given processes together into new StaticProcess()s if they
+    have the same name. Returns a iterable of processes.
+
+    procs: iter
+        A iterable of static processes.
+    """
+    new_procs = collections.defaultdict(lambda: 0)
+    for proc in procs:
+        new_procs[proc.name] += proc
+    return new_procs.values()

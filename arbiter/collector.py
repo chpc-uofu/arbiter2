@@ -151,7 +151,7 @@ class Collector(object):
         )
         # Collect usage in a poll
         for _ in range(0, self.poll):
-            timer.start(waittime)
+            timer.start_now(waittime)
 
             # Collect Overall General Metrics: CPU, Memory (AllUsersSliceInstance())
             try:
@@ -185,7 +185,11 @@ class Collector(object):
                             # Likely don't have permission to read from
                             # /proc/<pid>/smaps
                             logger.warning(err)
-            time.sleep(timer.delta)
+
+            delta = timer.delta
+            if delta <= 0:
+                logger.debug("Timing of collection poll is behind by %.5f seconds", -delta)
+            time.sleep(max(0, delta))
 
         # Average the usage over all the polls
         div_by = self.poll - 1
@@ -251,7 +255,7 @@ class TimeRecorder(object):
         self.start_time = time.time()
         self.waittime = 0
 
-    def start(self, waittime):
+    def start_now(self, waittime):
         """
         Starts the time recorder.
         """
@@ -263,7 +267,7 @@ class TimeRecorder(object):
         """
         Returns how much waiting is left.
         """
-        return max(0, self.waittime - self.time_since_start)
+        return self.waittime - self.time_since_start
 
     @property
     def time_since_start(self):

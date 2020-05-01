@@ -1,74 +1,54 @@
 # SPDX-License-Identifier: GPL-2.0-only
-import matplotlib
-matplotlib.use("Agg")  # Required for server (no displays)
-import matplotlib.pyplot as plt
 import datetime
 import collections
 import logging
-import datetime
+import itertools
+import matplotlib
 import copy
+matplotlib.use("Agg")  # Required for server (no displays)
+import matplotlib.pyplot as plt
+import pidinfo
 import usage
 
 
 logger = logging.getLogger("arbiter." + __name__)
 
 
-def _iso_from_epoch(epoch):
+def make_multi_stackplot(filepath, title, x, y_cpu, y_mem, proc_names,
+                         cpu_ylimit, mem_ylimit, cpu_threshold=None,
+                         mem_threshold=None):
     """
-    Returns an ISO-formatted time string from an epoch time stamp.
+    Creates a stackplot with memory and CPU utilization.
 
-    epoch: int
-        An epoch timestamp.
-    """
-    return datetime.datetime.isoformat(_epoch_datetime(int(epoch)))
-
-
-def _epoch_datetime(epoch):
-    """
-    Returns a datetime object from an epoch timestamp.
-
-    epoch: int
-        An epoch timestamp.
-    """
-    return datetime.datetime.fromtimestamp(int(epoch))
-
-
-def make_multi_stackplot(plot_filepath, x, y_cpu, y_mem, proc_names, hostname,
-                         username, mem_ylimit, cpu_ylimit, mem_threshold=None,
-                         cpu_threshold=None):
-    """
-    Creates a stackplot with memory and CPU utilization. Saves the file at
-    plot_filepath.
-
-    plot_filepath: str
+    filepath: str
         The name and path of the file to save to.
+    title: str
+        The title of the plot.
     x: [int, ]
         The x-axis; epoch time stamps matching the outer list of y_cpu/mem.
     y_cpu: [[float, ], ]
-        The CPU usage of each process, where the outer list represents time.
+        The CPU usage of each process, where the outer list represents unique
+        processes and the inner list represents time.
     y_mem: [[float, ], ]
-        The memory usage of each process, where the outer list represents time.
+        The memory usage of each process, where the outer list represents
+        unique processes and the inner list represents time.
     proc_names: [str, ]
         Process names. The order should correspond to the y-axes.
-    hostname: str
-        The hostname on which the event took place.
-    username: str
-        The username of the user responsible for the violation.
-    mem_ylimit: int
-        The y limit of the memory plot.
     cpu_ylimit: int
         The y limit of the cpu plot.
-    mem_threshold: int, None
-        The y mem value to place a optional threshold horizontal bar.
+    mem_ylimit: int
+        The y limit of the memory plot.
     cpu_threshold: int, None
         The y cpu value to place a optional threshold horizontal bar.
+    mem_threshold: int, None
+        The y mem value to place a optional threshold horizontal bar.
     """
     if (not y_cpu or not y_mem or len(y_cpu[0]) < 2 or len(y_mem[0]) < 2):
         logger.warning("Image could not be created with 0 usage values")
         return
 
     # Prepare axes
-    x = [_epoch_datetime(i) for i in x]
+    x = [datetime.datetime.fromtimestamp(int(i)) for i in x]
 
     plt_format, axes = plt.subplots(2, sharex=True, figsize=(7, 7))
 
@@ -77,7 +57,7 @@ def make_multi_stackplot(plot_filepath, x, y_cpu, y_mem, proc_names, hostname,
         axes[0].stackplot(x, y_cpu, labels=proc_names)
         plt.xlabel("Time")
         axes[0].set_ylabel("Core usage (%)")
-        axes[0].set_title("Utilization of " + username + " on " + hostname)
+        axes[0].set_title(title)
         axes[1].stackplot(x, y_mem, labels=proc_names)
         axes[1].set_ylabel("Memory usage (GB)")
 
@@ -100,7 +80,7 @@ def make_multi_stackplot(plot_filepath, x, y_cpu, y_mem, proc_names, hostname,
 
         # Save images
         plt_format.autofmt_xdate()
-        plt.savefig(plot_filepath, bbox_inches="tight")
+        plt.savefig(filepath, bbox_inches="tight")
         plt.close()
     except IndexError:
         logger.warning("Email image could not be created. There was a "
@@ -109,107 +89,123 @@ def make_multi_stackplot(plot_filepath, x, y_cpu, y_mem, proc_names, hostname,
         return
 
 
-def multi_stackplot_from_procs(plot_filepath, hostname, username,
-                               relevant_events, overall_usage, mem_quota,
-                               cpu_quota, mem_threshold=None,
-                               cpu_threshold=None):
+def events_to_metric_lists(events, cpu_quota, mem_quota):
     """
-    Makes a mutli-stackplot from a relevant_events dictionary. The plot will
-    be saved to the specified plot_filepath. The stackplot takes in processes
-    and plots their usage relative to the total usage for both CPU and memory.
+    Transforms a events dictionary (where the keys are timestamps and the
+    values are lists of StaticProcess()s) into a list of sorted events by cpu,
+    mem and process names. Every index in the outer list represents a unique
+    process and every index in the inner list represents a event.
 
-    plot_filepath: str
-        The name and path to the file to save the plot to.
-    hostname: str
-        The name of the host.
-    username: str
-        The username of the owner of the StaticProcess().
-    relevant_events: {int: [StaticProcecss(), ... ]}
+    events: {int: [StaticProcecss(), ... ]}
         A dictionary of events; the value is a list of processes that are
         associated with that time event.
-    overall_usage:
-        Overall usage of the user in the form [timestamps, CPU, memory].
-        See actions.output for more information.
-    mem_quota: float
-        The memory quota.
     cpu_quota: float
         The cpu quota.
-    mem_threshold: int, None
-        The y mem value to place a optional threshold horizontal bar.
-    cpu_threshold: int, None
-        The y cpu value to place a optional threshold horizontal bar.
+    mem_quota: float
+        The mem quota.
     """
-    # Get all the processes and their names
-    all_procs = [proc for procs in relevant_events.values() for proc in procs]
-    proc_names = set([proc.name for proc in all_procs])
+    # Combine process obj with same name for each event
+    combo_events = {
+        event: set(pidinfo.combo_procs_by_name(procs))
+        for event, procs in events.items()
+    }
+    all_procs = set(itertools.chain.from_iterable(combo_events.values()))
+    event_mold = [0.0] * len(combo_events.keys())
 
-    # Create a dictionary of timestamps that contain usage values
-    gen_timestamps, gen_cpu, gen_mem = overall_usage
-    proc_total_mem_usages = {timestamp: 0.0 for timestamp in gen_timestamps}
-    proc_total_cpu_usages = copy.deepcopy(proc_total_mem_usages)
+    # Create dict of processes, with values being usage at every event
+    proc_cpu_events = {
+        proc.name: copy.deepcopy(event_mold)
+        for proc in all_procs
+    }
+    proc_mem_events = copy.deepcopy(proc_cpu_events)
+    for i, event in enumerate(combo_events):
+        for proc in combo_events[event]:
+            # Update usage for this event
+            proc_cpu_events[proc.name][i] = proc.usage["cpu"]
+            proc_mem_events[proc.name][i] = proc.usage["mem"]
 
-    # Generate molds with default values and later fill them in
-    proc_proportional_usages = {name: [[0.0] * len(gen_timestamps),  # CPU
-                                       [0.0] * len(gen_timestamps)]  # Memory
-                                for name in proc_names}
-
-    for pos, timestamp in enumerate(gen_timestamps):
-        # For each timestamp, add the usage of all the processes. This is what
-        # is used to find proportional usage for each process in the same
-        # timestamp.
-        for proc in relevant_events[timestamp]:
-            proc_total_cpu_usages[timestamp] += proc.usage["cpu"]
-            proc_total_mem_usages[timestamp] += proc.usage["mem"]
-            proc_proportional_usages[proc.name][1][pos] += proc.usage["mem"]
-            proc_proportional_usages[proc.name][0][pos] += proc.usage["cpu"]
-
-    # Finally, generate the proportional usage values and put into lists
-    mem_usages = []
-    cpu_usages = []
-    proc_names = []
-    for proc_name in proc_proportional_usages:
-        proc_mem_usages = proc_proportional_usages[proc_name][1]
-        proc_cpu_usages = proc_proportional_usages[proc_name][0]
-
-        # For each time event, fit the usage to the overall usage. Effectively
-        # useless of "other processes**" is enabled since the difference
-        # between process usage and general/cgroup usage is zero.
-        for num in range(len(proc_mem_usages)):
-            ts = gen_timestamps[num]
-            proc_mem_usages[num] = _fit_usage_to(proc_mem_usages[num],
-                                                 proc_total_mem_usages[ts],
-                                                 gen_mem[num])
-
-            proc_cpu_usages[num] = _fit_usage_to(proc_cpu_usages[num],
-                                                 proc_total_cpu_usages[ts],
-                                                 gen_cpu[num])
-
-        mem_usages.append(proc_proportional_usages[proc_name][1])
-        cpu_usages.append(proc_proportional_usages[proc_name][0])
-        proc_names.append(proc_name)
-
+    proc_names = [proc.name for proc in all_procs]
+    proc_cpu_events_list = list(proc_cpu_events.values())
+    proc_mem_events_list = list(proc_mem_events.values())
     sorted_usage = usage.rel_sorted(
-        zip(cpu_usages, mem_usages, proc_names),
+        zip(proc_cpu_events_list, proc_mem_events_list, proc_names),
         cpu_quota, mem_quota,
         key=lambda z: (sum(z[0]), sum(z[1])),  # cpu, memory
         reverse=True
     )
-    sorted_cpu, sorted_mem, sorted_names = zip(*sorted_usage)
+    return map(list, zip(*sorted_usage))
+
+
+def multi_stackplot_from_events(filepath, title, events, general_usage,
+                                cpu_quota, mem_quota, cpu_threshold=None,
+                                mem_threshold=None):
+    """
+    Makes a mutli-stackplot from a events dictionary. The plot will be saved
+    to the specified filepath. Note that the stackplot takes in processes and
+    plots their usage relative to the overall usage (it scales the usage to
+    fit the overall usage in the graph).
+
+    filepath: str
+        The name and path to the file to save the plot to.
+    title: str
+        The title of the plot.
+    events: {int: [StaticProcecss(), ... ]}
+        A dictionary of events; the value is a list of processes that are
+        associated with that time event.
+    general_usage:
+        Overall usage of the user in the form [timestamps, CPU, memory], where
+        the metrics are lists containing values for every event.
+    cpu_quota: float
+        The cpu quota.
+    mem_quota: float
+        The memory quota.
+    cpu_threshold: int, None
+        The y cpu value to place a optional threshold horizontal bar.
+    mem_threshold: int, None
+        The y mem value to place a optional threshold horizontal bar.
+    """
+    timestamps, gen_cpu_events, gen_mem_events = general_usage
+    metric_lists = events_to_metric_lists(events, cpu_quota, mem_quota)
+    proc_cpu_events, proc_mem_events, proc_names = metric_lists
+
+    # cgroup usage is used for badness score calculations (minus whitelisted
+    # process usage), but the process information we're given may not sum up
+    # to the cgroup usage. Since the cgroup usage is the authority for
+    # violations (it's more accurate), we'll scale up the process usage to fit
+    # the cgroup usage. With the addition of "other processes**", this scaling
+    # should only account for processes missing due to the proc count cutoff.
+    # Ultimately the manipulated plot will justify us calling users out, even
+    # when the process data is not completely accurate.
+    for i in range(len(timestamps)):
+        total_proc_event_cpu = sum(proc_cpu_event[i] for proc_cpu_event in proc_cpu_events)
+        total_proc_event_mem = sum(proc_mem_event[i] for proc_mem_event in proc_mem_events)
+        for proc_index in range(len(proc_names)):
+            proc_cpu_events[proc_index][i] = _fit_usage_to(
+                proc_cpu_events[proc_index][i],
+                total_proc_event_cpu,
+                gen_cpu_events[i]
+            )
+            proc_mem_events[proc_index][i] = _fit_usage_to(
+                proc_mem_events[proc_index][i],
+                total_proc_event_mem,
+                gen_mem_events[i]
+            )
 
     padding = 1.2
     mem_ylimit = mem_quota * padding
     cpu_ylimit = cpu_quota * padding
-    make_multi_stackplot(plot_filepath,
-                         gen_timestamps,
-                         sorted_cpu,
-                         sorted_mem,
-                         sorted_names,
-                         hostname,
-                         username,
-                         mem_ylimit,
-                         cpu_ylimit,
-                         mem_threshold,
-                         cpu_threshold)
+    make_multi_stackplot(
+        filepath,
+        title,
+        timestamps,
+        proc_cpu_events,
+        proc_mem_events,
+        proc_names,
+        cpu_ylimit,
+        mem_ylimit,
+        cpu_threshold,
+        mem_threshold
+    )
 
 
 def _fit_usage_to(usage, total_usage, target_usage):

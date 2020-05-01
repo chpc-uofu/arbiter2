@@ -50,7 +50,7 @@ approach of overriding the all of operators and not using the parent's
 operators.
 """
 
-metrics = {"cpu": 0, "mem": 0}
+metrics = {"cpu": 0.0, "mem": 0.0}
 
 
 class Usage(object):
@@ -97,14 +97,14 @@ class Usage(object):
 
     def __add__(self, other):
         if isinstance(other, type(self)):
-            kwargs = vars(self)
+            kwargs = vars(self).copy()
             kwargs["usage"] = {
                 metric: usage + other.usage[metric]
                 for metric, usage in self.usage.items()
             }
             return type(self)(**kwargs)
         else:
-            kwargs = vars(self)
+            kwargs = vars(self).copy()
             kwargs["usage"] = {
                 metric: usage + other
                 for metric, usage in self.usage.items()
@@ -116,14 +116,14 @@ class Usage(object):
 
     def __sub__(self, other):
         if isinstance(other, type(self)):
-            kwargs = vars(self)
+            kwargs = vars(self).copy()
             kwargs["usage"] = {
                 metric: usage - other.usage[metric]
                 for metric, usage in self.usage.items()
             }
             return type(self)(**kwargs)
         else:
-            kwargs = vars(self)
+            kwargs = vars(self).copy()
             kwargs["usage"] = {
                 metric: usage - other
                 for metric, usage in self.usage.items()
@@ -134,14 +134,14 @@ class Usage(object):
         return self.__sub__(other)
 
     def __truediv__(self, other):
-        kwargs = vars(self)
+        kwargs = vars(self).copy()
         kwargs["usage"] = {
             metric: usage / other for metric, usage in self.usage.items()
         }
         return type(self)(**kwargs)
 
     def __floordiv__(self, other):
-        kwargs = vars(self)
+        kwargs = vars(self).copy()
         kwargs["usage"] = {
             metric: usage // other for metric, usage in self.usage.items()
         }

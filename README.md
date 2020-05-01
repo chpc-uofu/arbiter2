@@ -13,14 +13,32 @@ To review modifications, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Tools for monitoring and managing users
 
+The following tools all (optionally) use the `ARBDIR`, `ARBETC` and `ARBCONFIG` environment variables to allow for the tools to be used and moved outside of the tools/ directory without any additional flags. The following can be modified and put in a bashrc/bash\_profile to set these automatically.
+```bash
+ARBBASEDIR="/usr/local/src/Arbiter2/1.4.0/"
+export ARBDIR="$ARBBASEDIR/arbiter"
+export ARBETC="$ARBBASEDIR/etc"
+export ARBCONFIG="$ARBETC/config.toml $ARBETC/_nomemsw.toml $ARBETC/_noperms.toml"
+```
+
 ### Querying a user's status
-Using both a status database (statuses.db) and the given configuration, [arbstatus.py](tools/arbstatus.py) can look up what status a user is in, as well as his or her status timeout. Run `arbstatus.py --help` to view all the options.
+The [arbstatus.py](tools/arbstatus.py) tool can look up what status a user is in, as well as their status timeout. Run `arbstatus.py --help` to view all the options.
+```bash
+$ ./arbstatus.py
+Status:                  admin
+Time Left:                 inf
+Penalty Occurrences:         0
+Default Status:          admin
+```
 
 ### Checking the configuration
 A configuration can be checked for basic valididty using the [cfgparser.py](tools/cfgparser.py) tool. This tool also allows admins to print out the config with hidden and special variables in the resulting configuration.
 
 ### Viewing logs
 Information in logs can be viewed quickly with the [logsearch](tools/logsearch/logsearch.md) utility.
+
+### Getting periodic updates
+To get periodic updates about repeat offenders and processes that are seen frequently, use the [arbreport.py](tools/arbreport.py) tool. It allows administrators to see an overview of recent actions taken and can provide summary emails.
 
 ### Corralling users' processes
 Processes can be moved to the appropriate locations in the cgroup hierarchy with [user_corraller.sh](tools/user_corraller.sh). This can be applied to all users with [allusers_corraller.sh](tools/allusers_corraller.sh). More information is available in the installation guide.

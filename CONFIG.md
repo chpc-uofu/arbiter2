@@ -136,6 +136,14 @@ time_to_min_bad_with_usage = 100 / badness_change_per_interval
 
 - The text appended to the filename for plots. If the default is used, the resulting filename would look like: `YYYY-MM-DDTHH:MM:SS_username_%H_event.png`.
 
+**plot_process_cap** _(optional/defaulted: 20)_: `int` (greater or equal to 1)
+
+- The maximum number of processes to display in plots. Note that beyond 20 processes, the plot legend flows beyond the graph boundaries (results in a taller image).
+
+**table_process_cap** _(optional/defaulted: 12)_: `int` (greater or equal to 1)
+
+- The maximum number of processes to display in tables.
+
 ## Database `[database]`
 
 _Note: the database header must still exist in the toml file, even if all the values are defaulted._
@@ -146,7 +154,7 @@ _Note: the database header must still exist in the toml file, even if all the va
 
 **log_rotate_period** _(optional/defaulted: 7)_: `int` (greater or equal to 1)
 
-- How long the databases should be rotated for in days.
+- How long the databases should be rotated for in days. An empty log will be created, even if there are no events for a period.
 
 ## Processes `[processes]`
 
@@ -225,7 +233,7 @@ Penalty status groups are a specical kind of a status group. Naturally, they are
 
 **occur_timeout**: `int` (greater or equal to 1)
 
-- The amount of time in seconds for which a user keeps their current "occurrence" count (after that period it is lowered by 1). This occurrences count tracks how many times the user has been in penalty, and indexes (minus 1) into the `order` list when determining which penalty to apply after a user gets called out for their actions. e.g. a user in penalty3 (the third item in the order list) would have a occurences count of 3. The timeout starts when a user has a badness score of 0 and is not in a penalty status.
+- The amount of time in seconds for which a user keeps their current "occurrence" count (after that period it is lowered by 1). This occurrences count tracks how many times the user has been in penalty, and indexes (minus 1) into the `order` list when determining which penalty to apply after a user gets called out for their actions. e.g. a user in penalty3 (the third item in the order list) would have a occurences count of 3. The timeout starts when the user returns to their default status (from penalty) and is reset when the user has a non-zero badness.
 
 **relative_quotas**  _(optional/defaulted: true)_: `boolean`
 

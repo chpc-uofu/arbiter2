@@ -147,7 +147,6 @@ def read_status(status_config=default_config):
         status_dict[uid] = Status(
             **{statusdb_key_map[k]: v for k, v in row.items()}
         )
-        status_dict[uid] = enforce_cfg_db_consistency(uid, status_dict[uid])
     return status_dict
 
 
@@ -208,7 +207,7 @@ def enforce_cfg_db_consistency(uid, status):
         current_status = status.current
         if status.current == status.default:
             current_status = default_status
-        status = Status(default_status, current_status, status.occurrences,
+        status = Status(current_status, default_status, status.occurrences,
                         status.timestamp, status.occur_timestamp)
     return status
 
@@ -359,6 +358,18 @@ def add_badness(uid, timestamp, badness, status_config=default_config):
     insert = insert.format(shared.badness_tablename, badness_schema)
     args = (int(uid), timestamp, badness["cpu"], badness["mem"])
     database.execute_command(status_config.status_loc, insert, *args)
+
+
+def remove_badness(uid, status_config=default_config):
+    """
+    Removes a user's badness score from the badness table in the status
+    database.
+
+    uid: int
+        The user's uid associated with the properties.
+    """
+    remove = 'DELETE FROM {} WHERE "uid" IS ?;'.format(shared.badness_tablename)
+    database.execute_command(status_config.status_loc, remove, int(uid))
 
 
 def create_status_database(path, status_table, badness_table):

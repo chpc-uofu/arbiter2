@@ -6,72 +6,83 @@ Logs events and actions that arbiter takes to a database.
 import os
 import pathlib
 import re
-from datetime import datetime, timedelta, MINYEAR
+import datetime
 import database
+import sys
+import collections
+
+actions_schema = [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "action",
+    "user",
+    "time INTEGER"
+]
+general_schema = [
+    "actionid INTEGER",
+    "mem",
+    "cpu",
+    "time INTEGER",
+    "FOREIGN KEY(actionid) REFERENCES actions(id) ON DELETE CASCADE"
+]
+process_schema = [
+    "actionid INTEGER",
+    "name",
+    "mem",
+    "cpu",
+    "uptime INTEGER",
+    "timestamp INTEGER",
+    "FOREIGN KEY(actionid) REFERENCES actions(id) ON DELETE CASCADE"
+]
 
 
-def rotated_filename(filename, days, datefmt):
+def last_rotation_date(path_fmt, date_fmt):
+    """
+    Returns a datetime.date when the last rotation took place. If no
+    rotation has taken place, a minimum date is returned.
+
+    path_fmt: str
+        A filepath with a {} in it, where the date goes.
+    date_fmt: str
+        A time.strftime format used to look at previous logs.
+    """
+    latest_log_date = datetime.date.min
+    fglob = os.path.basename(path_fmt).replace("{}", "*")
+    path = pathlib.Path(path_fmt).parent
+    for db in path.glob(fglob):
+        try:
+            found_date_str = re.search(fglob.replace("*", "(.*)"), db.name).group(1)
+            found_date = datetime.datetime.strptime(found_date_str, date_fmt).date()
+            if found_date > latest_log_date:
+                latest_log_date = found_date
+        except (AttributeError, ValueError):
+            continue
+    return latest_log_date
+
+
+def rotated_filename(path_fmt, date_fmt):
     """
     Returns a filename formatted with a date that is correctly rotated given
     the number of days.
 
-    filename: str
-        A filename with a {} in it, where the date goes.
-    days: int
-        Defines the period of time that things should be changed.
-    datefmt: str
-        A time.strftime format used to look at previous logs and write out
-        new ones.
+    path_fmt: str
+        A filepath with a {} in it, where the date goes.
+    date_fmt: str
+        A time.strftime format used to look at previous logs.
     """
-    latest_log_dt = datetime(MINYEAR, 1, 1)
-    fglob = filename.replace("{}", "*")
-    # Get all dbs in directory and create datetime obj from names
-    path = pathlib.Path(filename).parent
-    for db in path.glob(fglob):
-        try:
-            found_date = re.search(fglob.replace("*", "(.*)"), db.name).group(1)
-            found_datetime = datetime.strptime(found_date, datefmt)
-            if (found_datetime > latest_log_dt):
-                latest_log_dt = found_datetime
-        except (AttributeError, ValueError):
-            continue
-
-    now = datetime.now()
-    if (latest_log_dt + timedelta(days) < now):
-        latest_log_dt = now  # Return a new file
-    return filename.format(latest_log_dt.strftime(datefmt))
+    last_rotation = last_rotation_date(path_fmt, date_fmt)
+    return path_fmt.format(last_rotation.strftime(date_fmt))
 
 
-def log_schema():
-    """
-    Returns the schema used for creating the log database tables. Output is of
-    the form [[str, ], [str, ], [str, ]] in the order actions, general, and
-    process.
-    """
-    return [["id INTEGER PRIMARY KEY AUTOINCREMENT", "action", "user",
-             "time INTEGER"],
-            ["actionid INTEGER", "mem", "cpu", "time INTEGER",
-             "FOREIGN KEY(actionid) REFERENCES actions(id) ON DELETE CASCADE"],
-            ["actionid INTEGER", "name", "mem", "cpu", "uptime INTEGER",
-             "timestamp INTEGER",
-             "FOREIGN KEY(actionid) REFERENCES actions(id) ON DELETE CASCADE"]]
-
-
-def create_log_database(filename, schema, names):
+def create_log_database(filename):
     """
     Create a database for storing log information.
 
     filename: str
         The path to the database file to be used.
-    schema: [[str, ], [str, ], [str, ]]
-        The schema for the logging database tables (actions, general, process).
-    names: [str, str, str]
-        The names for each table.
     """
-    database.create_database(filename, schema[0], names[0])
-    database.create_database(filename, schema[1], names[1])
-    database.create_database(filename, schema[2], names[2])
-    return os.path.isfile(os.path.expanduser(filename))
+    database.create_database(filename, actions_schema, "actions")
+    database.create_database(filename, general_schema, "general")
+    database.create_database(filename, process_schema, "process")
 
 
 def add_action(action, user, historic_events, timestamp, filename):
@@ -119,11 +130,6 @@ def _add_log_entry(action, filename):
     filename: str
         The path to the database file to be used.
     """
-    # Check for a database file; create it if not found
-    if not os.path.isfile(filename):
-        table_names = ["actions", "general", "process"]
-        create_log_database(filename, log_schema(), table_names)
-
     # Enable foreign key constraints to have correct secondary tables
     database.execute_command(filename, "pragma foreign_keys = ON")
 
@@ -187,3 +193,83 @@ class Process(object):
         self.cpu = cpu
         self.uptime = uptime
         self.timestamp = timestamp
+
+
+def object_mapper(content, map_to):
+    """
+    Map information in a list to an arbitrary object. This is used to take the
+    information in a log file and return it to the original object from which
+    it was generated.
+    """
+    id_object_map = []
+    for num, row in enumerate(content):
+        try:
+            mapped = map_to(*row[1])
+            id_object_map.append([row[0], mapped])
+        except:
+            continue
+    return id_object_map
+
+
+def table_by_id(filename, tablename):
+    """
+    Extract the information from tablename in database filename. Return it as
+    a list with the primary key in the first location and all other fields in
+    the second.
+    """
+    values = database.execute_command(
+        filename,
+        "SELECT * FROM {}".format(tablename)
+    )
+    results_by_id = []
+    for results in values:
+        try:
+            for result in results:
+                try:
+                    identity = result[0]
+                    others = result[1:]
+                    results_by_id.append([identity, others])
+                except:
+                    continue
+        except:
+            continue
+    return results_by_id
+
+
+def get_objects_by_id(filename, tablename, object_to_map):
+    """
+    Returns a list of objects from a database filename with table tablename
+    and an object object_to_map.
+    """
+    return object_mapper(table_by_id(filename, tablename), object_to_map)
+
+def get_table_info(filename, table, map_to):
+    """
+    Returns an object associated with a given log database filename and table
+    name (or None if the file does not exist). This is a simplification of
+    get_log_info() to avoid parsing the whole file and could likely be
+    consolidated further (to avoid repetition).
+    """
+    if not os.path.isfile(filename):
+        return None
+    tables = collections.OrderedDict()
+    tables[table] = map_to
+    return([get_objects_by_id(filename, table, tables[table])
+            for table in tables])
+
+
+def get_log_info(filename):
+    """
+    Returns Action, General, and Process objects for a given log database
+    filename (or None if the file does not exist).
+    """
+    if not os.path.isfile(filename):
+        return None
+    # Map of table names (schema) to objects in logdb.py
+    tables = collections.OrderedDict()
+    tables["actions"] = Action
+    tables["general"] = General
+    tables["process"] = Process
+    # Return a list of object lists (not pretty)
+    return([get_objects_by_id(filename, table, tables[table])
+            for table in tables])

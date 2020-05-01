@@ -82,6 +82,11 @@ def arguments():
                              "a file specified in the config, regardless of "
                              "this flag.",
                         dest="print_logs")
+    parser.add_argument("--version",
+                        action="store_true",
+                        help="Show version information of this arbiter.py "
+                             "instance.",
+                        dest="version")
     env = parser.add_mutually_exclusive_group()
     env.add_argument("-q", "--quiet",
                      action="store_true",
@@ -103,6 +108,15 @@ def arguments():
                              "configs).",
                         dest="configs")
     args = parser.parse_args()
+
+    if args.version:
+        try:
+            with open("version.txt") as vf:
+                print(vf.readline().strip())
+        except FileNotFoundError:
+            print("No version file found.")
+            sys.exit(1)
+        sys.exit(0)
 
     # insert the default etc/ path, used as a fallback
     insert("../etc")
@@ -186,6 +200,12 @@ def setup_logging(args, cfg, shared):
         fmttr=logger.service_fmttr,
         level=logging.INFO
     )
+    level_str = "CRITICAL" if args.quiet else "DEBUG" if args.verbose else "INFO"
+    startup_logger.info("Operational logging (arbiter.module) will be sent "
+                        "to %s%s with a verbosity of %s.",
+                        log_location,
+                        " and stdout" if args.print_logs else "",
+                        level_str)
 
 
 def pre_run(args):
@@ -194,10 +214,7 @@ def pre_run(args):
     """
     # Load the config
     setup_config(args.configs)
-
-    # Setup logging (based on the config)
     cfg = cfgparser.cfg
-    setup_logging(args, cfg, cfgparser.shared)
 
     # Turn on accounting
     if args.acct_uid:
@@ -232,6 +249,13 @@ def pre_run(args):
                              "to continue. Exiting.")
         sys.exit(2)
 
+    # Set up the opertional logger (arbiter.modulename)
+    setup_logging(args, cfg, cfgparser.shared)
+
+    if cfg.general.debug_mode:
+        startup_logger.info("Permissions and quotas won't be set since debug "
+                            "mode is on.")
+
 
 def acct_on_for(uid, controllers=("memory", "cpu")):
     """
@@ -249,6 +273,11 @@ def acct_on_for(uid, controllers=("memory", "cpu")):
     # on the machine. We use this to assert that the checks above aren't
     # failing because the user has logged out, rather than just the acct not
     # being on
+    # FIXME: This is another race condition (though very unlikely). If someone
+    #        logs out after they are picked for this check, but then log in
+    #        after the acct_on check then the systemd controller will exist
+    #        and the function will return that accounting is off, rather than
+    #        raise a FileNotFoundError even when accounting may be on.
     if not acct_on and not cgroup.controller_exists("systemd"):
         raise FileNotFoundError("The user disappeared!")
     return acct_on

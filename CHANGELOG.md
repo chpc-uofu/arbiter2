@@ -1,5 +1,59 @@
 # Changelog
 
+## Version 1.4.0
+
+**Changes:**
+
+- Integrated load average reporting into high usage emails via the site custom `integrations.py`. **This means that if you want this feature, you must merge the latest `etc/integrations.py` and `overall_high_usage_email_template.txt` into yours**. If you do not do this, nothing bad will happen but you just will not see the load average statistics in high usage warning emails. (This is why the version number has bumped to a 1.4)
+- Add configurable cap to the number of processes in plots. Defaults to the height of the plot.
+- Make number of processes reported in the process table configurable.
+- Introduce `ARBDIR`, `ARBETC` and `ARBCONFIG` environment variables that allow for the scripts inside of `tools/` to be used anywhere from anywhere, so long as these environment variables are set. See the README.md for more information.
+- Added a --version flag to Arbiter2.
+- Added additional debugging logging to help identify when collection polling is behind schedule. When this happens, history points (used in plots) are not being collected in the configurable amount of time. This may cause plots to be over a longer period of time and if a system event disrupts Arbiter's collection intervals, you may see smearing of data points in plots.
+- Speed up PSS memory collection on CentOS/RHEL 8 boxes massively (and on distros with 4.4+ kernels). This will go a long way towards reducing the CPU usage of Arbiter, particularly when lots of memory is in use.
+- Optimized reading of PSS memory values (for non CentOS/RHEL 8 boxes and on distros with 4.4+ kernels) by ~30%. This will reduce the CPU usage of Arbiter further.
+- Log the verbosity of Arbiter's logging on startup.
+- Created a proof of concept `arb2influx.py` script which pushes Arbiter statistics such as violations and badness scores to InfluxDB. The script and crontab can be found in `tools/`. Although completely functional, the script will have to be modified to point to your sites InfluxDB instance. Note that the script assumes a `logs/hostname/*` structure.
+- Created Arbiter summary email reporter called `arbreport.py` that looks at violations for a configurable period of time (e.g. a week) and sends out a summary email containing a list of users who have been called out over that period and the number of violations that occurred. Note that the script assumes a `logs/hostname/*` structure. An example cron wrapper script can be found at `etc/arbreport_cron_wrapper.sh`.
+
+**Bugfixes:**
+
+- Fixed inaccurate memory quota reporting in emails.
+- Clarified that a user's occurrences timeout is reset when they have a nonzero badness score. Previously we explained that the occur_timeout "starts when a user has a badness score of 0 and is not in a penalty status", which may or may not imply that the occurrences timeout resets when you have a nonzero badness score.
+- Prevented users with non-zero occurrnces from being untracked, leading to erroneous values in Arbiter's databases. This bug revolved around the fact that Arbiter2 is supposed to untrack users when they've logged out, their statuses are their default (the same as if they just logged into the machine) and they have zero occurrences (no history of violations). Unfortunately we didn't check for the last condition when untracking users, which has lead to the statusdb (statuses.db) database being filled with erroneous entries that are never removed. Arbiter2 itself can deal with this, but it causes a problem for tools/ such as `arb2influx.py` since they read statuses.db and end up pushing out erroneous violations. **To fix this issue in existing statuses.db databases, a `cleanup-statuses.py` tool/ has been created. This should be run upon upgrade and the usage will be described below**.
+- Fixed inconsistent log database rotations. New empty databases will now be created, even if there are no events during the log rotation period. Furthermore, new databases will be aligned to the previous rotation.
+
+
+**Upgrading steps (with git):**
+1. git stash
+2. git pull
+3. git stash pop
+4. If you want load average reporting in your high usage emails, you must merge the latest `etc/integrations.py` and `etc/overall_high_usage_email_template` into yours.
+5. Stop the arbiter service: `systemctl stop arbiter2`
+6. run `./tools/cleanup-statuses.py -d logs/**/statuses.db` (the last argument(s) point to your Arbiter's status databases)
+7. Restart the arbiter service: `systemctl restart arbiter2`
+
+**Upgrading steps (without git):**
+1. Clone the new update into a new directory
+2. Copy the old configuration file over (if applicable).
+3. If you want load average reporting in your high usage emails, you must merge the latest `etc/integrations.py` and `overall_high_usage_email_template` into yours.
+4. Stop the arbiter service: `systemctl stop arbiter2`
+5. Run `cd tools; ./cleanup-statuses.py -g ../etc/config.toml -d logs/**/statuses.db` (the last argument(s) point to your status databases)
+6. Restart the arbiter service: `systemctl restart arbiter2`
+
+**Example:**
+```
+mkdir arbiter2/1.4.0
+git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.4.0
+cp arbiter2/1.3.3/etc/config.toml arbiter2/1.4.0/etc
+# Merge new load average reporting in integrations.py and overall_high_usage_email_template.txt into previous files
+ln -s arbiter2/1.4.0 arbiter2/latest
+systemctl stop arbiter2
+cd tools
+./cleanup-statuses.py -d ../logs/**/statuses.db  # Assumes a logs/hostname/ structure
+systemctl restart arbiter2
+```
+
 ## Version 1.3.3
 
 **Changes:**

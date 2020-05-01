@@ -10,11 +10,11 @@ import argparse
 import collections
 import functools
 import os
-import time
+import pwd
+import shlex
 import sys
+import time
 import toml
-import cfgparser
-from cfgparser import cfg, shared
 
 
 def main(args):
@@ -27,6 +27,11 @@ def main(args):
     _, users = collect.run()
 
     for uid, user_obj in users.items():
+        try:
+            username = pwd.getpwuid(uid).pw_name
+            uid_name = f"{uid} ({username})"
+        except KeyError:
+            uid_name = str(uid)
         cpu_usage = user_obj.cpu_usage
         cpu_quota = user_obj.cpu_quota
         mem_usage = user_obj.mem_usage
@@ -44,7 +49,13 @@ def main(args):
         is_bad = is_bad_cpu or is_bad_mem
         found_badness |= is_bad
         if (is_bad and not args.quiet) or args.verbose or args.debug:
-            print(f"{uid:<9}\t(cpu {cpu_usage:.3f})\t(mem {mem_usage:.3f})")
+            # 25: max 9 digit uid + 16 username
+            # Note: Max username length is 32 chars (man 8 useradd) on linux,
+            #       but ps and similar utilities don't display past 8 chars.
+            #       We'll use 16 chars because we're nice but not 32 chars
+            #       nice because that's a waste of space for annoying to type
+            #       usernames :^)
+            print(f"{uid_name:<25}\t(cpu {cpu_usage:.3f})\t(mem {mem_usage:.3f})")
 
         if args.debug:
             debug_info = {
@@ -60,14 +71,19 @@ def main(args):
     return 1 if found_badness else 0
 
 
-def configure(args):
+def bootstrap(args):
     """
     Configures the program so that it can function correctly.
     """
-    os.chdir(args.arbdir)  # So we can load the whitelist and read statusdb
-    insert(args.arbdir)    # So we can use the Arbiter2 modules
+    # Make the path to files absolute. This makes behavior consistent when
+    # changing directories. Otherwise, configuration files would be relative to
+    # the arbiter/ directory
+    args.configs = [os.path.abspath(path) for path in args.configs]
+    os.chdir(args.arbdir)
+    insert(args.arbdir)
+    import cfgparser
     try:
-        if not cfgparser.load_config(*args.configs, check=False):
+        if not cfgparser.load_config(*args.configs, check=False, pedantic=False):
             print("There was an issue with the specified configuration (see "
                   "above). You can investigate this with the cfgparser.py "
                   "tool.")
@@ -85,26 +101,82 @@ def insert(context):
     sys.path.insert(0, os.path.abspath(os.path.join(context_path, context)))
 
 
+def arbiter_environ():
+    """
+    Returns a dictionary with the ARB environment variables. If a variable is
+    not found, it is not in the dictionary.
+    """
+    env = {}
+    env_vars = {
+        "ARBETC": ("-e", "--etc"),
+        "ARBDIR": ("-a", "--arbdir"),
+        "ARBCONFIG": ("-g", "--config")
+    }
+    for env_name, ignored_prefixes in env_vars.items():
+        env_value = os.environ.get(env_name)
+        if not env_value:
+            continue
+        warn = lambda i, s: print("{} in {} {}".format(i, env_name, s))
+        expanded_path = lambda p: os.path.expandvars(os.path.expanduser(p))
+
+        for prefix in ignored_prefixes:
+            if env_value.startswith(prefix):
+                env_value = env_value.lstrip(prefix).lstrip()
+                break
+
+        if env_name == "ARBCONFIG":
+            config_paths = shlex.split(env_value, comments=False, posix=True)
+            valid_paths = []
+            for path in config_paths:
+                if not os.path.isfile(expanded_path(path)):
+                    warn(path, "does not exist")
+                    continue
+                valid_paths.append(path)
+
+            if valid_paths:
+                env[env_name] = valid_paths
+            continue
+
+        expanded_value = expanded_path(env_value)
+        if not os.path.exists(expanded_value):
+            warn(env_value, "does not exist")
+            continue
+        if not os.path.isdir(expanded_value):
+            warn(env_value, "is not a directory")
+            continue
+        if env_name == "ARBDIR" and not os.path.exists(expanded_value + "/arbiter.py"):
+            warn(env_value, "does not contain arbiter modules! (not arbiter/ ?)")
+            continue
+        if env_name == "ARBETC" and not os.path.exists(expanded_value + "/integrations.py"):
+            warn(env_value, "does not contain etc modules! (no integrations.py)")
+            continue
+        env[env_name] = expanded_value
+    return env
+
+
 if __name__ == "__main__":
     desc = "A mini Arbiter2 that reports whether there is badness on the " \
            "host. The exit code can also be used to determine this. " \
            "Requires Arbiter2's statusdb to be set up (it is used to " \
            "determine a user's status)."
     parser = argparse.ArgumentParser(description=desc)
+    arb_environ = arbiter_environ()
     parser.add_argument("-a", "--arbdir",
                         type=str,
-                        help="Sets working directory in which Arbiter2 "
-                             "typically runs in. Defaults to ../arbiter.",
-                        default="../arbiter",
+                        help="Sets the directory in which arbiter modules "
+                             "are loaded from. Defaults to $ARBDIR if "
+                             "present or ../arbiter otherwise.",
+                        default=arb_environ.get("ARBDIR", "../arbiter"),
                         dest="arbdir")
     parser.add_argument("-g", "--config",
                         type=str,
                         nargs="+",
-                        default=["../etc/config.toml"],
                         help="The configuration files to use. Configs will be "
                              "cascaded together starting at the leftmost (the "
                              "primary config) going right (the overwriting "
-                             "configs). Defaults to ../etc/config.toml.",
+                             "configs). Defaults to $ARBCONFIG if present or "
+                             "../etc/config.toml otherwise.",
+                        default=arb_environ.get("ARBCONFIG", ["../etc/config.toml"]),
                         dest="configs")
     parser.add_argument("-i", "--interval",
                         type=int,
@@ -139,10 +211,7 @@ if __name__ == "__main__":
                      help="Prints out all the users usage information.",
                      dest="verbose")
     args = parser.parse_args()
-    configure(args)
-
-    # These have to be imported here since we need to load arbdir first
+    bootstrap(args)
     import collector
-
+    from cfgparser import cfg
     sys.exit(main(args))
-

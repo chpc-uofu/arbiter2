@@ -18,20 +18,21 @@ import plots
 import logging
 import datetime
 import cinfo
+import pidinfo
 import statuses
 import usage
 import integrations
-from cfgparser import cfg
+from cfgparser import shared, cfg
 
 logger = logging.getLogger("arbiter." + __name__)
 
 
-def send_warning_email(user, metadata, status_group, table, badness_timestamp,
+def send_warning_email(user_obj, metadata, status_group, table, badness_timestamp,
                        severity, plot_filepath):
     """
     Sends a warning email message.
 
-    user: user.User()
+    user_obj: user.User()
         The user to send the email to.
     metadata: Metadata()
         A namedtuple with email_addr, username and realname values.
@@ -54,8 +55,8 @@ def send_warning_email(user, metadata, status_group, table, badness_timestamp,
                                                  realname)
 
     time_in_penalty = statuses.lookup_status_prop(status_group).timeout / 60
-    penalty_cpu_quota, penalty_mem_quota = statuses.lookup_quotas(user.uid, status_group)
-    num_cores = round(user.cpu_quota / 100, 1)
+    penalty_cpu_quota, penalty_mem_quota = statuses.lookup_quotas(user_obj.uid, status_group)
+    num_cores = round(user_obj.cpu_quota / 100, 1)
     core_text = "core" if num_cores == 1 else "cores"
     message_body = integrations.warning_email_body(
         table,
@@ -64,11 +65,11 @@ def send_warning_email(user, metadata, status_group, table, badness_timestamp,
         hostname,
         time.strftime("%H:%M on %m/%d", time.localtime(badness_timestamp)),
         status_group,
-        round(penalty_cpu_quota / user.cpu_quota * 100),
+        round(penalty_cpu_quota / user_obj.cpu_quota * 100),
         str(num_cores) + " " + core_text,
         round(time_in_penalty),
-        round(cinfo.pct_to_gb(user.mem_quota) / penalty_mem_quota * 100),
-        round(cinfo.pct_to_gb(user.mem_quota), 1)
+        round(penalty_mem_quota / user_obj.mem_quota * 100),
+        round(cinfo.pct_to_gb(user_obj.mem_quota), 1)
     )
 
     if cfg.general.debug_mode:
@@ -123,13 +124,11 @@ def send_warning_email(user, metadata, status_group, table, badness_timestamp,
     )
 
 
-def send_nice_email(user, metadata, status_group):
+def send_nice_email(metadata, status_group):
     """
     Prepare an email message to notify users when their penalty status has
     timed out and are back to their default status group.
 
-    user: user.User()
-        The user to send the email to.
     metadata: Metadata()
         A namedtuple with email_addr, username and realname values.
     status_group: str
@@ -180,7 +179,8 @@ def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage):
     hostname = socket.gethostname()
     subject = integrations.overall_high_usage_subject(hostname)
     timestamp = int(time.time())
-    iso_timestamp = plots._iso_from_epoch(timestamp)
+    epoch_datetime = datetime.datetime.fromtimestamp(timestamp)
+    iso_timestamp = datetime.datetime.isoformat(epoch_datetime)
 
     # Machine data
     total_mem = round(cinfo.bytes_to_gb(cinfo.total_mem))
@@ -272,7 +272,7 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
             logger.warning("Unable to send message: %s", str(err))
 
 
-def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
+def limit_user(user_obj, limit_on, limit, fallback_limit, memsw=False):
     """
     Limits a user slice based on the limit_on (either "cpu" or "mem") and the
     corresponding limit. If the limit specified fails to be be applied, the
@@ -282,8 +282,8 @@ def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
     the given limit as possible. Returns whether the given limit was written
     out (e.g. if mem is scaled, returns False).
 
-    user_slice: cinfo.UserSlice()
-        A user_slice object that belongs to a specific group.
+    user_obj: user.User()
+        A user to limit.
     limit_on: "cpu" or "mem"
         The type of limit.
     limit: int
@@ -304,22 +304,22 @@ def limit_user(user_slice, limit_on, limit, fallback_limit, memsw=False):
         return False
     try:
         if limit_on == "mem":
-            return _scale_mem_quota(user_slice, limit, fallback_limit,
+            return _scale_mem_quota(user_obj.cgroup, limit, fallback_limit,
                                     memsw=memsw,
                                     retries=5,
                                     retry_rate=0.1)
         elif limit_on == "cpu":
-            user_slice.set_cpu_quota(limit)
+            user_obj.cgroup.set_cpu_quota(limit)
             logger.debug("Successfully set the CPU quota of %s to %.1f%%",
-                         user_slice.uid, limit)
+                         user_obj.uid_name, limit)
             return True
     except FileNotFoundError:
         logger.info("User: disappeared before any limit could be set. User "
                     "%s's database record will not be updated to reflect the "
-                    "change.", user_slice.uid)
+                    "change.", user_obj.uid_name)
     except OSError as err:
         logger.warning("Failed to set a %s limit of %s%% for %s, due to an "
-                       "OSError: %s", limit_on, limit, user_slice.uid, err)
+                       "OSError: %s", limit_on, limit, user_obj.uid_name, err)
     return False
 
 
@@ -382,15 +382,15 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
     return False
 
 
-def upgrade_penalty(user_slice, status):
+def upgrade_penalty(user_obj):
     """
     Upgrades the penalty of the user, increasing their occurrences. Their
     occurrence maps directly to the order in which penalties are specified in
     the config.
     i.e., penalty1 -> penalty2 (occurrences 1 -> 2) and admin -> penalty1.
 
-    user_slice: cinfo.UserSlice()
-        The user's cgroup object.
+    user_obj: user.User()
+        A user to upgrade penalty on.
     status: statuses.Status()
         The user's current status information.
 
@@ -398,7 +398,7 @@ def upgrade_penalty(user_slice, status):
     >>> statuses.get_status(1001)  # Now they are in penalty2
     ["penalty2", "normal", 1, 1534261840]
     """
-    uid = user_slice.uid
+    status = user_obj.status
     penalties = cfg.status.penalty.order
     new_occurrences = min(status.occurrences + 1, len(penalties))
     penalty_group = penalties[new_occurrences - 1]
@@ -406,8 +406,8 @@ def upgrade_penalty(user_slice, status):
     delta_occur = 0
     if new_occurrences != status.occurrences:  # Cap occurrences to max penalty
         delta_occur = 1
-    update_status(user_slice, penalty_group, status.default)
-    if not statuses.update_occurrences(uid, delta_occur, update_timestamp=True):
+    update_status(user_obj, penalty_group)
+    if not statuses.update_occurrences(user_obj.uid, delta_occur, update_timestamp=True):
         # This likely means that update_status failed (the database couldn't
         # be updated), but we could still query whether a user was in the
         # database (otherwise a exception would be thrown). If this is the
@@ -419,86 +419,87 @@ def upgrade_penalty(user_slice, status):
     return penalty_group
 
 
-def update_status(user_slice, new_status_group, default_status_group):
+def update_status(user_obj, new_status_group):
     """
     Applies the new status group to the user. If a status group is defined as a
     penalty group, applies the quota relative to their default status if
     specified in the config. The user is removed from the status database if
     they are in their default status with 0 occurrences.
 
-    user_slice: cinfo.UserSlice()
-        The user's cgroup object.
+    user_obj: user.User()
+        A user to update the status of.
     new_status_group: str
         The new status group to apply to the user.
-    default_status_group: str
-        The user's default status group.
     """
-    cpu_quota, mem_quota = statuses.lookup_quotas(user_slice.uid, new_status_group)
-    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(user_slice.uid, default_status_group)
+    default_status_group = user_obj.status.default
+    uid = user_obj.uid
+    cpu_quota, mem_quota = statuses.lookup_quotas(uid, new_status_group)
+    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(uid, default_status_group)
     cpu_thread = threading.Thread(target=limit_user,
-                                  args=(user_slice, "cpu", cpu_quota,
+                                  args=(user_obj, "cpu", cpu_quota,
                                         default_cpu_quota))
     mem_thread = threading.Thread(target=limit_user,
-                                  args=(user_slice, "mem", mem_quota,
+                                  args=(user_obj, "mem", mem_quota,
                                         default_mem_quota, cfg.processes.memsw))
     cpu_thread.start()
     mem_thread.start()
 
     # Add the user to the status database
-    statuses.add_user(user_slice.uid, new_status_group, default_status_group)
+    statuses.add_user(uid, new_status_group, default_status_group)
 
-    new_statuses = statuses.get_status(user_slice.uid)
-    curr_occurrences = new_statuses[2]
+    new_statuses = statuses.get_status(uid)
+    curr_occurrences = new_statuses.occurrences
     in_default_status = new_status_group == default_status_group
 
     if curr_occurrences == 0 and in_default_status:
         # Remove user from database
-        statuses.remove_user(user_slice.uid)
+        statuses.remove_user(uid)
 
 
-def user_nice_email(user, new_status_group):
+def user_nice_email(uid, new_status_group):
     """
     Sends a nice email to the user indicating that they have been released
     from penalty.
 
-    user: user.User()
-        The user to send the email to.
+    uid: int
+        A uid of the user.
     new_status_group: str
         The new status group to that has been applied to the user.
     """
-    metadata = integrations.get_user_metadata(user.uid)
-    send_nice_email(user, metadata, new_status_group)
+    metadata = integrations.get_user_metadata(uid)
+    send_nice_email(metadata, new_status_group)
 
 
-def user_warning_email(user, new_status_group):
+def user_warning_email(user_obj, new_status_group):
     """
     Warns the user about their policy violations in a email.
 
-    user: user.User()
+    user_obj: user.User()
         The user to send the email to.
     new_status_group: str
         The new status group to that has been applied to the user.
     """
-    metadata = integrations.get_user_metadata(user.uid)
+    uid = user_obj.uid
+    metadata = integrations.get_user_metadata(uid)
     username = metadata.username
     # Get the expression to be used to describe the penalty status
     severity_expression = statuses.lookup_status_prop(new_status_group).expression
 
     # Get the user's baseline status
-    default_status_group = statuses.lookup_default_status_group(user.uid)
-    cpu_quota, mem_quota = statuses.lookup_quotas(user.uid, default_status_group)
+    default_status_group = statuses.lookup_default_status_group(uid)
+    cpu_quota, mem_quota = statuses.lookup_quotas(uid, default_status_group)
     mem_quota_gb = cinfo.pct_to_gb(mem_quota)
 
     # Convert mem pcts to gb for each process
-    hist = history_mem_to_gb(user.history)
+    hist = history_mem_to_gb(user_obj.history)
 
     # Creates a dict of times, with a value of a list of processes per time
     events = {e["time"]: list(e["pids"].values()) for e in hist}
 
-    # Get the same top processes in each event
-    cutoff = 16
-    top_events = copy.deepcopy({event: sorted(procs, reverse=True)[:cutoff]
-                                for event, procs in events.items()})
+    # We don't want the graph to overflow, so we'll cap things here
+    plot_proc_cap = cfg.email.plot_process_cap
+    top_events = cap_procs_in_events(events, cpu_quota, mem_quota_gb,
+                                     plot_proc_cap)
     add_process_count(top_events)
 
     plot_filepath = os.path.join(cfg.email.plot_location, "_".join([
@@ -510,16 +511,58 @@ def user_warning_email(user, new_status_group):
     generate_plot(plot_filepath, username, top_events, hist, cpu_quota,
                   mem_quota_gb)
 
-    email_table = generate_table(top_events, cpu_quota, mem_quota_gb)
+    table_proc_cap = cfg.email.table_process_cap
+    email_table = generate_table(top_events, cpu_quota, mem_quota_gb,
+                                 table_proc_cap)
     send_warning_email(
-        user,
+        user_obj,
         metadata,
         new_status_group,
         email_table,
-        user.badness_timestamp,
+        user_obj.badness_timestamp,
         severity_expression,
         plot_filepath
     )
+
+
+def cap_procs_in_events(events, cpu_quota, mem_quota_gb, cap):
+    """
+    Returns a new event dictionary with the number of processes over all the
+    events being capped at the given cutoff based on the usage relative to cpu
+    and memory quotas. The missing usage is ignored.
+
+    events: {int: [StaticProcess(), ], }
+        A dictionary of lists of StaticProcess()s, indexed by their event
+        timestamp.
+    cpu_quota: float
+        The cpu quota.
+    mem_quota_gb: float
+        The memory quota in gigabytes.
+    cap: int
+        The max number of processes over all the events.
+    """
+    uniq_summed_procs_per_event = (
+        pidinfo.combo_procs_by_name(procs) for procs in events.values()
+    )
+    uniq_summed_procs = pidinfo.combo_procs_by_name(
+        itertools.chain.from_iterable(uniq_summed_procs_per_event)
+    )
+    sorted_procs = usage.rel_sorted(
+        uniq_summed_procs,
+        cpu_quota, mem_quota_gb,
+        key=lambda p: (p.usage["cpu"], p.usage["mem"]),  # cpu, memory
+        reverse=True
+    )
+    # Always include "other processes**"
+    top_proc_names = {
+        proc.name
+        for i, proc in enumerate(sorted_procs)
+        if i < cap and proc.name != shared.other_processes_label
+    }
+    return {
+        event: [proc for proc in procs if proc.name in top_proc_names]
+        for event, procs in events.items()
+    }
 
 
 def generate_plot(plot_filepath, username, proc_events, history, cpu_quota,
@@ -547,25 +590,24 @@ def generate_plot(plot_filepath, username, proc_events, history, cpu_quota,
     mem_quota_gb: float
         The memory quota in gigabytes.
     """
-    # cgroup data usage
     timestamps = [event["time"] for event in history]
     cgroup_mem = [event["mem"] for event in history]
     cgroup_cpu = [event["cpu"] for event in history]
-    general_events = (timestamps, cgroup_cpu, cgroup_mem)
-    plots.multi_stackplot_from_procs(
+    overall_usage = (timestamps, cgroup_cpu, cgroup_mem)
+    title = "Utilization of {} on {}".format(username, socket.gethostname())
+    plots.multi_stackplot_from_events(
         plot_filepath,
-        socket.gethostname(),
-        username,
+        title,
         proc_events,
-        general_events,
-        mem_quota_gb,
+        overall_usage,
         cpu_quota,
-        cfg.badness.mem_badness_threshold * mem_quota_gb,
-        cfg.badness.cpu_badness_threshold * cpu_quota
+        mem_quota_gb,
+        cfg.badness.cpu_badness_threshold * cpu_quota,
+        cfg.badness.mem_badness_threshold * mem_quota_gb
     )
 
 
-def generate_table(events, cpu_quota, mem_quota_gb, cutoff=12):
+def generate_table(events, cpu_quota, mem_quota_gb, max_rows):
     """
     Generates an HTML table from all the processes in the events.
 
@@ -576,6 +618,8 @@ def generate_table(events, cpu_quota, mem_quota_gb, cutoff=12):
         The cpu quota.
     mem_quota_gb: float
         The memory quota in gigabytes.
+    max_rows: int
+        The max number of rows to generate.
     """
     table = ("""
         <table>
@@ -586,7 +630,7 @@ def generate_table(events, cpu_quota, mem_quota_gb, cutoff=12):
             </tr>
     """)
 
-    for proc in avg_procs_over_events(events, cpu_quota, mem_quota_gb)[:cutoff]:
+    for proc in avg_procs_over_events(events, cpu_quota, mem_quota_gb)[:max_rows]:
         table += ("""
             <tr>
                 <td>{}</td>
@@ -631,9 +675,11 @@ def avg_procs_over_events(events, cpu_quota, mem_quota_gb):
         The memory quota.
     """
     summed_procs_by_event = list(
-        itertools.chain(*map(combo_procs_by_name, events.values()))
+        itertools.chain.from_iterable(
+            map(pidinfo.combo_procs_by_name, events.values())
+        )
     )
-    summed_procs = combo_procs_by_name(summed_procs_by_event)
+    summed_procs = pidinfo.combo_procs_by_name(summed_procs_by_event)
     avg_procs = [proc / proc.count for proc in summed_procs]
     return usage.rel_sorted(
         avg_procs,
@@ -641,20 +687,6 @@ def avg_procs_over_events(events, cpu_quota, mem_quota_gb):
         key=lambda proc: (proc.usage["mem"], proc.usage["cpu"]),
         reverse=True
     )
-
-
-def combo_procs_by_name(processes):
-    """
-    Combines the given processes together into new StaticProcess()s if they
-    have the same name. Returns a iterable of processes.
-
-    processes: iter
-        A iterable of static processes.
-    """
-    new_processes = collections.defaultdict(lambda: 0)
-    for process in processes:
-        new_processes[process.name] += process
-    return iter(new_processes.values())
 
 
 def add_process_count(events):
@@ -670,7 +702,7 @@ def add_process_count(events):
     # Get max and min
     inf = float("inf")
     process_extrema = collections.defaultdict(lambda: (inf, -inf))
-    for processes in map(combo_procs_by_name, events.values()):
+    for processes in map(pidinfo.combo_procs_by_name, events.values()):
         for process in processes:
             min_count, max_count = process_extrema[process.name]
             process_extrema[process.name] = (

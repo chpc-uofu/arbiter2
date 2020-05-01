@@ -2,7 +2,8 @@
 
 <h2>Node details</h2>
 <p>The node has {} physical cores  (with {} {} each), {} GB of memory, and {} GB of swap.</p>
-    
+<p>The load average for the past 1m, 5m and 15m is: {}, {}, {}.
+
 <h2>Usage</h2>
 
 <table>
@@ -24,6 +25,9 @@
         <td>User</td>
         <td>CPU usage (%)</td>
         <td>Memory usage (%)</td>
+        <td>Current/default status group</td>
+        <td>CPU hard quota (%)</td>
+        <td>Memory quota (%)</td>
     </tr>
 
 {}

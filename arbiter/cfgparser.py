@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import argparse
 import copy
@@ -288,7 +289,9 @@ base_validation_config = {
             dir_exists,
             default_value="../logs/%H"
         ),
-        "plot_suffix": ValidationProtocol(str, default_value="%H_event")
+        "plot_suffix": ValidationProtocol(str, default_value="%H_event"),
+        "plot_process_cap": ValidationProtocol(int, isaboveeq1, default_value=20),
+        "table_process_cap": ValidationProtocol(int, isaboveeq1, default_value=12)
     },
     "database": {
         "log_location": ValidationProtocol(
@@ -707,8 +710,19 @@ def arguments():
     parser.add_argument(
         "configs",
         type=str,
-        nargs="+",
-        help="The configurations to evaluate.",
+        nargs="*",
+        help="The configuration files to use. Configs will be cascaded "
+             "together starting at the leftmost (the primary config) going "
+             "right (the overwriting configs). Defaults to $ARBCONFIG if "
+             "present or ../etc/config.toml otherwise.",
+    )
+    parser.add_argument(
+        "-g", "--config",
+        type=str,
+        nargs="*",
+        help="Dummy flag for the configuration files to use. For "
+             "compatibility with arbiter.py.",
+        dest="_configs"
     )
     parser.add_argument(
         "--print",
@@ -742,13 +756,18 @@ def arguments():
 
 if __name__ == "__main__":
     args = arguments()
-    resulting_config = combine_toml(*args.configs)
+    configs = args._configs if args._configs else args.configs
+    if not configs:
+        sys.stderr.write("{}: error: the following arguments are required: "
+                         "configs\n".format(os.path.basename(sys.argv[0])))
+        exit(2)
+    resulting_config = combine_toml(*configs)
     if args.print:
         if not args.hide_defaults:
             place_optional_values(resulting_config)
         if args.eval_specials:
             place_special_vars(resulting_config)
         print(toml.dumps(resulting_config))
-    elif load_config(*args.configs, pedantic=args.pedantic) is not True:
+    elif load_config(*configs, pedantic=args.pedantic) is not True:
         sys.exit(2)
 

@@ -81,7 +81,6 @@ def log_high_usage(usage, users):
     logger.debug("Usage that caused warning: %s", usage)
     rotated_filename = logdb.rotated_filename(
         cfg.database.log_location + "/" + shared.logdb_name,
-        cfg.database.log_rotate_period,
         shared.log_datefmt
     )
     timestamp = int(time.time())

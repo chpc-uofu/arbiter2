@@ -51,14 +51,6 @@ def evaluate(user_obj):
             new_status = _upgrade_penalty(user_obj)
             service_logger.info("User %s was put in: %s", username, new_status)
 
-        elif _eval_lower_occurrences(badness, status):
-            logger.info("Lowering the occurrences count of %s", uid_name)
-            service_logger.info("User %s penalty occurrences has lowered to: "
-                                "%s", username, status.occurrences - 1)
-            if not statuses.update_occurrences(uid, -1, update_timestamp=True):
-                logger.warning("Occurrences couldn't be lowered since the user"
-                               "isn't in the status database!")
-
         # If the user is being bad
         elif badness_score > 0:
             logger.debug("%s has nonzero badness: %s", uid_name, badness)
@@ -72,6 +64,25 @@ def evaluate(user_obj):
                 "cpu": user_obj.cpu_usage,
                 "mem": user_obj.mem_usage
             })
+            if status.occurrences > 0:
+                # The user's usage should stay below the threshold in order to
+                # for the occurrences timeout to continue. Otherwise, we'll
+                # reset the timer here
+                user_obj.status = statuses.Status(
+                    current=status.current,
+                    default=status.default,
+                    occurrences=status.occurrences,
+                    timestamp=status.timestamp,
+                    occur_timestamp=int(time.time())
+                )
+
+        elif _eval_lower_occurrences(badness, status):
+            logger.info("Lowering the occurrences count of %s", uid_name)
+            service_logger.info("User %s penalty occurrences has lowered to: "
+                                "%s", username, status.occurrences - 1)
+            if not statuses.update_occurrences(uid, -1, update_timestamp=True):
+                logger.warning("Occurrences couldn't be lowered since the user"
+                               "isn't in the status database!")
 
     # Lower status for bad users past a certain time
     # TODO (Dylan): Make this applicable to more than just penalty groups
@@ -93,8 +104,8 @@ def _eval_lower_occurrences(latest_badness, status):
     """
     expected_lower_time = time.time() - cfg.status.penalty.occur_timeout
     occurrences_timed_out = status.occur_timestamp < expected_lower_time
-    been_bad = sum(latest_badness.values()) != 0
-    return status.occurrences > 0 and occurrences_timed_out and not been_bad
+    is_bad = sum(latest_badness.values()) != 0
+    return status.occurrences > 0 and occurrences_timed_out and not is_bad
 
 
 def _lower_penalty(user_obj):
@@ -105,10 +116,10 @@ def _lower_penalty(user_obj):
         A user to lower the penalty of.
     """
     default_status = user_obj.status.default
-    actions.update_status(user_obj.cgroup, default_status, default_status)
+    actions.update_status(user_obj, default_status)
     # Update timestamp of occurrences
     statuses.update_occurrences(user_obj.uid, 0, update_timestamp=True)
-    actions.user_nice_email(user_obj, default_status)
+    actions.user_nice_email(user_obj.uid, default_status)
     return default_status
 
 
@@ -119,12 +130,11 @@ def _upgrade_penalty(user_obj):
     user_obj: user.User()
         A user to upgrade the penalty of.
     """
-    new_status = actions.upgrade_penalty(user_obj.cgroup, user_obj.status)
+    new_status = actions.upgrade_penalty(user_obj)
 
     # Add the record of the action to the database
     rotated_filename = logdb.rotated_filename(
         cfg.database.log_location + "/" + shared.logdb_name,
-        cfg.database.log_rotate_period,
         shared.log_datefmt
     )
     logdb.add_action(new_status, user_obj.uid, user_obj.history,

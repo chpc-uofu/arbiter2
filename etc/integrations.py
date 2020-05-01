@@ -1,5 +1,6 @@
 from cfgparser import cfg
 import pwd
+import os
 import collections
 import logging
 
@@ -183,13 +184,20 @@ def overall_high_usage_body(hostname, iso_timestamp, total_cores,
                 <td>{} ({})</td>
                 <td>{:0.2f}</td>
                 <td>{:0.2f}</td>
+                <td>{}</td>
+                <td>{:0.2f}</td>
+                <td>{:0.2f}</td>
             </tr>
         """).format(
             username,
             realname,
             user.cpu_usage,
-            user.mem_usage
+            user.mem_usage,
+            "{}/{}".format(user.status.current, user.status.default),
+            user.cpu_quota,
+            user.mem_quota
         )
+    one_la, five_la, fifteen_la = os.getloadavg()
     return message.format(
         hostname,
         iso_timestamp,
@@ -198,6 +206,7 @@ def overall_high_usage_body(hostname, iso_timestamp, total_cores,
         thread_string,
         total_mem,
         total_swap,
+        one_la, five_la, fifteen_la,
         total_cpu_usage,
         total_mem_usage,
         total_swap_usage,
