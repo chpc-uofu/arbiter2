@@ -1,34 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+# SPDX-FileCopyrightText: Copyright (c) 2020 Idaho National Laboratory
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 """
 A module that defines actions to be taken against users.
 """
 
-import smtplib
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
-import itertools
-import threading
-import socket
 import collections
-import copy
-import time
-import os
-import plots
-import logging
 import datetime
-import cinfo
+import itertools
+import logging
+import os
+import smtplib
+import threading
+import time
+
+import plots
+from cfgparser import shared, cfg
+import sysinfo
 import pidinfo
 import statuses
 import usage
 import integrations
-from cfgparser import shared, cfg
 
 logger = logging.getLogger("arbiter." + __name__)
 
 
 def send_warning_email(user_obj, metadata, status_group, table, badness_timestamp,
-                       severity, plot_filepath):
+                       severity, plot_filepath, syncing_hosts):
     """
     Sends a warning email message.
 
@@ -46,30 +49,33 @@ def send_warning_email(user_obj, metadata, status_group, table, badness_timestam
         The severity of the event (used in email titles).
     plot_filepath: str
         A path to the plot.
+    syncing_hosts: [str, ]
+        A set of hosts that statusdb is syncing with.
     """
     username, realname, email_addr = metadata
     to = [email_addr]
     bcc = cfg.email.admin_emails
-    hostname = socket.gethostname()
-    subject = integrations.warning_email_subject(hostname, severity, username,
-                                                 realname)
+    subject = integrations.warning_email_subject(sysinfo.hostname, severity,
+                                                 username, realname)
 
     time_in_penalty = statuses.lookup_status_prop(status_group).timeout / 60
-    penalty_cpu_quota, penalty_mem_quota = statuses.lookup_quotas(user_obj.uid, status_group)
-    num_cores = round(user_obj.cpu_quota / 100, 1)
+    penalty_cpu_quota, penalty_mem_quota = user_obj.status.quotas()
+    cpu_quota, mem_quota = user_obj.status.quotas(default=True)
+    num_cores = round(cpu_quota / 100, 1)
     core_text = "core" if num_cores == 1 else "cores"
     message_body = integrations.warning_email_body(
         table,
         username,
         realname,
-        hostname,
+        sysinfo.hostname,
         time.strftime("%H:%M on %m/%d", time.localtime(badness_timestamp)),
         status_group,
-        round(penalty_cpu_quota / user_obj.cpu_quota * 100),
+        round(penalty_cpu_quota / cpu_quota * 100),
         str(num_cores) + " " + core_text,
         round(time_in_penalty),
-        round(penalty_mem_quota / user_obj.mem_quota * 100),
-        round(cinfo.pct_to_gb(user_obj.mem_quota), 1)
+        round(penalty_mem_quota / mem_quota * 100),
+        round(sysinfo.pct_to_gb(mem_quota), 1),
+        syncing_hosts,
     )
 
     if cfg.general.debug_mode:
@@ -136,7 +142,7 @@ def send_nice_email(metadata, status_group):
     """
     username, realname, email_addr = metadata
     subject = integrations.nice_email_subject(
-        socket.gethostname(),
+        sysinfo.hostname,
         username,
         realname,
         status_group
@@ -176,18 +182,18 @@ def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage):
     total_mem_usage: float
         The total memory usage on the machine.
     """
-    hostname = socket.gethostname()
+    hostname = sysinfo.hostname
     subject = integrations.overall_high_usage_subject(hostname)
     timestamp = int(time.time())
     epoch_datetime = datetime.datetime.fromtimestamp(timestamp)
     iso_timestamp = datetime.datetime.isoformat(epoch_datetime)
 
     # Machine data
-    total_mem = round(cinfo.bytes_to_gb(cinfo.total_mem))
-    threads_per_core = cinfo.threads_per_core
+    total_mem = round(sysinfo.bytes_to_gb(sysinfo.total_mem))
+    threads_per_core = sysinfo.threads_per_core
     total_cores = os.cpu_count() / threads_per_core
-    total_swap_usage = (1 - cinfo.free_swap() / cinfo.total_swap) * 100
-    total_swap_gb = round(cinfo.bytes_to_gb(cinfo.total_swap))
+    total_swap_usage = (1 - sysinfo.free_swap() / sysinfo.total_swap) * 100
+    total_swap_gb = round(sysinfo.bytes_to_gb(sysinfo.total_swap))
     thread_string = "thread" if threads_per_core == 1 else "threads"
 
     # Prepare the message body
@@ -295,13 +301,9 @@ def limit_user(user_obj, limit_on, limit, fallback_limit, memsw=False):
         Whether to use memsw if applying a mem limit.
 
     >>> # Limits memory of the uid 1001 to at least 50% of the total memory.
-    >>> limit_user(cinfo.UserSlice(1001), "mem", 50)
+    >>> limit_user(cginfo.UserSlice(1001), "mem", 50)
     True
     """
-    if cfg.general.debug_mode:
-        logger.debug("Not setting %s %s because debug mode is on.",
-                     round(limit, 2), limit_on)
-        return False
     try:
         if limit_on == "mem":
             return _scale_mem_quota(user_obj.cgroup, limit, fallback_limit,
@@ -331,7 +333,7 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
     retry, a period of time is waited. Returns whether the aimed_limit was
     applied.
 
-    cgroup: cinfo.SystemdCGroup()
+    cgroup: cginfo.SystemdCGroup()
         A cgroup object that belongs to a specific group.
     aimed_limit: int
         The limit to aim for when applying quotas.
@@ -382,78 +384,64 @@ def _scale_mem_quota(cgroup, aimed_limit, fallback_limit, memsw=False,
     return False
 
 
-def upgrade_penalty(user_obj):
+def set_quotas(user_obj):
     """
-    Upgrades the penalty of the user, increasing their occurrences. Their
-    occurrence maps directly to the order in which penalties are specified in
-    the config.
-    i.e., penalty1 -> penalty2 (occurrences 1 -> 2) and admin -> penalty1.
-
-    user_obj: user.User()
-        A user to upgrade penalty on.
-    status: statuses.Status()
-        The user's current status information.
-
-    >>> upgrade_penalty(cinfo.UserSlice(uid=1001), statuses.get_status(1001))
-    >>> statuses.get_status(1001)  # Now they are in penalty2
-    ["penalty2", "normal", 1, 1534261840]
-    """
-    status = user_obj.status
-    penalties = cfg.status.penalty.order
-    new_occurrences = min(status.occurrences + 1, len(penalties))
-    penalty_group = penalties[new_occurrences - 1]
-
-    delta_occur = 0
-    if new_occurrences != status.occurrences:  # Cap occurrences to max penalty
-        delta_occur = 1
-    update_status(user_obj, penalty_group)
-    if not statuses.update_occurrences(user_obj.uid, delta_occur, update_timestamp=True):
-        # This likely means that update_status failed (the database couldn't
-        # be updated), but we could still query whether a user was in the
-        # database (otherwise a exception would be thrown). If this is the
-        # case, we should attempt to manually rollback any notion of the
-        # penalty changing without touching the database.
-        logger.warning("Occurrences couldn't be lowered since the user isn't "
-                       "in the status database!")
-        return status.current  # internal status doesn't change on update_status
-    return penalty_group
-
-
-def update_status(user_obj, new_status_group):
-    """
-    Applies the new status group to the user. If a status group is defined as a
-    penalty group, applies the quota relative to their default status if
-    specified in the config. The user is removed from the status database if
-    they are in their default status with 0 occurrences.
+    Applies the quotas of the new status group to user. If the quotas are
+    already set, then nothing happens.
 
     user_obj: user.User()
         A user to update the status of.
-    new_status_group: str
-        The new status group to apply to the user.
     """
-    default_status_group = user_obj.status.default
     uid = user_obj.uid
-    cpu_quota, mem_quota = statuses.lookup_quotas(uid, new_status_group)
-    default_cpu_quota, default_mem_quota = statuses.lookup_quotas(uid, default_status_group)
-    cpu_thread = threading.Thread(target=limit_user,
-                                  args=(user_obj, "cpu", cpu_quota,
-                                        default_cpu_quota))
-    mem_thread = threading.Thread(target=limit_user,
-                                  args=(user_obj, "mem", mem_quota,
-                                        default_mem_quota, cfg.processes.memsw))
-    cpu_thread.start()
-    mem_thread.start()
+    memsw = cfg.processes.memsw
+    status = user_obj.status
+    cgroup = user_obj.cgroup
+    cpu_quota, mem_quota = status.quotas()
+    default_cpu_quota, default_mem_quota = status.quotas(default=True)
 
-    # Add the user to the status database
-    statuses.add_user(uid, new_status_group, default_status_group)
+    try:
+        # mostly_eq() because we can't set a lower memory limit (e.g. putting
+        # someone in penalty) than a cgroup already has, and our subsequent
+        # attempts to set this limit lower will fail quite often. It's enough
+        # to call it done if it's mostly equal
+        eq_cpu_quota = mostly_eq(cpu_quota, cgroup.cpu_quota())
+        eq_mem_quota = mostly_eq(mem_quota, sysinfo.bytes_to_pct(cgroup.mem_quota(memsw)))
+    except FileNotFoundError:
+        return
+    except OSError as err:
+        logger.debug("Failed to get quotas because %s", err)
+        return
 
-    new_statuses = statuses.get_status(uid)
-    curr_occurrences = new_statuses.occurrences
-    in_default_status = new_status_group == default_status_group
+    if eq_cpu_quota and eq_mem_quota:
+        return
 
-    if curr_occurrences == 0 and in_default_status:
-        # Remove user from database
-        statuses.remove_user(uid)
+    logger.debug("Applying limits for %s", uid)
+    if not eq_cpu_quota:
+        cpu_thread = threading.Thread(
+            target=limit_user,
+            args=(user_obj, "cpu", cpu_quota, default_cpu_quota)
+        )
+        cpu_thread.start()
+    if not eq_mem_quota:
+        mem_thread = threading.Thread(
+            target=limit_user,
+            args=(user_obj, "mem", mem_quota, default_mem_quota, memsw)
+        )
+        mem_thread.start()
+
+
+def mostly_eq(lvalue, rvalue, fudge=0.05):
+    """
+    Returns whether the two values are mostly equal based on the fudge factor.
+
+    lvalue: float
+        The value on the left.
+    rvalue: float
+        The value on the right.
+    fudge: float
+        The margin of error to account for. i.e. the fudge factor
+    """
+    return lvalue >= rvalue * (1 - fudge) and lvalue <= rvalue * (1 + fudge)
 
 
 def user_nice_email(uid, new_status_group):
@@ -470,7 +458,7 @@ def user_nice_email(uid, new_status_group):
     send_nice_email(metadata, new_status_group)
 
 
-def user_warning_email(user_obj, new_status_group):
+def user_warning_email(user_obj, new_status_group, syncing_hosts):
     """
     Warns the user about their policy violations in a email.
 
@@ -478,6 +466,8 @@ def user_warning_email(user_obj, new_status_group):
         The user to send the email to.
     new_status_group: str
         The new status group to that has been applied to the user.
+    syncing_hosts: [str, ]
+        A list of hosts that statusdb is syncing with.
     """
     uid = user_obj.uid
     metadata = integrations.get_user_metadata(uid)
@@ -486,12 +476,11 @@ def user_warning_email(user_obj, new_status_group):
     severity_expression = statuses.lookup_status_prop(new_status_group).expression
 
     # Get the user's baseline status
-    default_status_group = statuses.lookup_default_status_group(uid)
-    cpu_quota, mem_quota = statuses.lookup_quotas(uid, default_status_group)
-    mem_quota_gb = cinfo.pct_to_gb(mem_quota)
+    cpu_quota, mem_quota = user_obj.status.quotas(default=True)
+    mem_quota_gb = sysinfo.pct_to_gb(mem_quota)
 
     # Convert mem pcts to gb for each process
-    hist = history_mem_to_gb(user_obj.history)
+    hist = history_mem_to_gb(user_obj.history_iter())
 
     # Creates a dict of times, with a value of a list of processes per time
     events = {e["time"]: list(e["pids"].values()) for e in hist}
@@ -519,9 +508,10 @@ def user_warning_email(user_obj, new_status_group):
         metadata,
         new_status_group,
         email_table,
-        user_obj.badness_timestamp,
+        user_obj.badness_obj.start_of_badness(),
         severity_expression,
-        plot_filepath
+        plot_filepath,
+        syncing_hosts
     )
 
 
@@ -594,7 +584,7 @@ def generate_plot(plot_filepath, username, proc_events, history, cpu_quota,
     cgroup_mem = [event["mem"] for event in history]
     cgroup_cpu = [event["cpu"] for event in history]
     overall_usage = (timestamps, cgroup_cpu, cgroup_mem)
-    title = "Utilization of {} on {}".format(username, socket.gethostname())
+    title = "Utilization of {} on {}".format(username, sysinfo.hostname)
     plots.multi_stackplot_from_events(
         plot_filepath,
         title,
@@ -641,30 +631,31 @@ def generate_table(events, cpu_quota, mem_quota_gb, max_rows):
     return table + "</table>"
 
 
-def history_mem_to_gb(history):
+def history_mem_to_gb(history_iter):
     """
     Returns a new history item with the process and memory data converted to
     GB, rather than a pct.
 
-    history: collections.deque(dict, )
-        A list of history events ordered chronologically (i.e. most recent is
-        first). History events are formatted as:
+    history_iter: collections.deque(dict, )
+        A iterator of history events ordered chronologically (i.e. most recent
+        is first). History events are formatted as:
             {"time": float,
              "mem": float,
              "cpu": float,
              "pids": {int (pid): pidinfo.StaticProcess()}}
     """
-    new_hist = copy.deepcopy(history)
-    for event in new_hist:
-        event["mem"] = cinfo.pct_to_gb(event["mem"])
+    new_history = collections.deque()
+    for event in history_iter:
+        event["mem"] = sysinfo.pct_to_gb(event["mem"])
         for process in event["pids"].values():
-            process.usage["mem"] = cinfo.pct_to_gb(process.usage["mem"])
-    return new_hist
+            process.usage["mem"] = sysinfo.pct_to_gb(process.usage["mem"])
+        new_history.appendleft(event)
+    return new_history
 
 
 def avg_procs_over_events(events, cpu_quota, mem_quota_gb):
     """
-    Returns a list of the top StaticProcess()s from the events.
+    Returns a list of StaticProcess()s averaged over the events.
 
     events: {int: [StaticProcess(), ], }
         A dictionary of lists of StaticProcess()s, indexed by their event
@@ -674,13 +665,35 @@ def avg_procs_over_events(events, cpu_quota, mem_quota_gb):
     mem_quota: float
         The memory quota.
     """
-    summed_procs_by_event = list(
-        itertools.chain.from_iterable(
-            map(pidinfo.combo_procs_by_name, events.values())
+    # The idea here is to get the total usage of a processes with the same
+    # name per event, sum them and then divide that usage by the range of
+    # events that the process occurs in.
+    #
+    # For averages normally you'd divide by the total number of events,
+    # however when we show that data to users it can be quite small if there
+    # is a large number of history events kept (especially if
+    # time_to_max_bad is a small proportion of the number of history events
+    # times the arbiter_refresh * history_per_refresh), so we'll justify
+    # ourselves more here by dividing by the range it appears in, not events
+    uniq_summed_procs_by_event = list(map(
+        pidinfo.combo_procs_by_name, events.values()
+    ))
+    uniq_summed_procs = set(
+        pidinfo.combo_procs_by_name(
+            itertools.chain.from_iterable(uniq_summed_procs_by_event)
         )
     )
-    summed_procs = pidinfo.combo_procs_by_name(summed_procs_by_event)
-    avg_procs = [proc / proc.count for proc in summed_procs]
+    avg_procs = []
+    for summed_proc in uniq_summed_procs:
+        events_seen_in = [
+            i
+            for i, procs in enumerate(uniq_summed_procs_by_event)
+            if summed_proc in procs  # StaticProcess __eq__ looks at names
+        ]
+        delta_range_events_seen_in = (max(events_seen_in) + 1) - min(events_seen_in)
+        avg_proc = summed_proc / delta_range_events_seen_in
+        avg_procs.append(avg_proc)
+
     return usage.rel_sorted(
         avg_procs,
         cpu_quota, mem_quota_gb,

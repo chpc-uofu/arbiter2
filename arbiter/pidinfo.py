@@ -1,10 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+# SPDX-FileCopyrightText: Copyright (c) 2020 Idaho National Laboratory
+#
 # SPDX-License-Identifier: GPL-2.0-only
-import os
+
+import collections
 import errno
 import math
-import collections
+import os
 import re
-import cinfo
+
+import sysinfo
 import usage
 
 """
@@ -19,6 +24,11 @@ philosophy of Static, non-Static and Instance. See usage.py for details.
 # See https://github.com/torvalds/linux/commit/493b0e9d945fa9dfe96be93ae41b4ca4b6fdb317 for more details
 smaps_rollup_exists = os.path.exists("/proc/1/smaps_rollup")
 
+# Constants for getting process information
+pss_swap_re = rb"Pss:\s+(\d+)\skB"
+pss_no_swap_re = rb"\nPss:\s+(\d+)\skB"
+pss_pattern_no_swap = re.compile(pss_no_swap_re)
+pss_pattern_swap = re.compile(pss_swap_re)
 
 class Process():
     """
@@ -62,7 +72,7 @@ class Process():
         """
         with open("/proc/{}/status".format(self.pid)) as proc_status:
             lines = proc_status.read()
-            match = re.search(r"{}:\s+(.*)".format(key), lines)
+            match = re.search(key + r":\s+(.*)", lines)
             if match:
                 try:
                     return match.group(1).strip()
@@ -112,9 +122,8 @@ class Process():
         with open("/proc/uptime") as proc_uptime:
             uptime = float(proc_uptime.readline().split(" ")[0])
 
-        clock_ticks = os.sysconf(2)  # Num of clock ticks per second
         start_time = float(self.proc_stat(22)[0])  # Since boot in clock ticks
-        start_time /= clock_ticks  # Divide by clock ticks / sec to get jiffies
+        start_time /= sysinfo.clockticks_per_sec  # Divide to get jiffies
         return uptime - start_time
 
     def curr_memory_bytes(self, pss=False, swap=True):
@@ -158,19 +167,44 @@ class Process():
             Whether to include swapped memory in the usage reported.
         """
         smaps_file = "smaps_rollup" if smaps_rollup_exists else "smaps"
-        re_pss = r"Pss:\s+(\d+)\skB" if swap else r"\nPss:\s+(\d+)\skB"
-        pss_pattern = re.compile(re_pss)
-        pss = 0
-        with open("/proc/{}/{}".format(self.pid, smaps_file)) as smaps:
+        pss_pattern = pss_pattern_swap if swap else pss_pattern_no_swap
+
+        # We read as bytes to avoid the overhead of converting to a string
+        with open("/proc/{}/{}".format(self.pid, smaps_file), 'rb') as smaps:
             return sum(
                 int(match.group(1)) if match else 0
                 for match in pss_pattern.finditer(smaps.read())
             ) * 1024  # smaps returns kB
 
+    def curr_shared_memory_bytes(self):
+        """
+        Returns the current shared memory usage in bytes. File-backed memory
+        (which is implicitly shared) is not included here.
+
+        Note: File-backed is created via mmap(filename, ...), whereas pure
+              shared memory reported here is mmap(NULL, ..., MAP_SHARED, ...).
+              Both can be obtained in one go via the shared field in
+              /proc/<pid>/statm or by adding RssShmem and RssFile in
+              /proc/<pid>/status (+ curr_file_memory_bytes()).
+        """
+        # Use /proc/<pid>/status here since the ProcessInstance subclass
+        # caches this file and thus we don't have to open another file.
+        raw_rss_shmem = self.proc_status("RssShmem").rstrip(" kB")
+        return int(raw_rss_shmem) * 1024 if raw_rss_shmem else 0.0
+
+    def curr_file_memory_bytes(self):
+        """
+        Returns the current file-backed memory usage in bytes.
+        """
+        # Use /proc/<pid>/status here since the ProcessInstance subclass
+        # caches this file and thus we don't have to open another file.
+        raw_rss_file = self.proc_status("RssFile").rstrip(" kB")
+        return int(raw_rss_file) * 1024 if raw_rss_file else 0.0
+
     def curr_cputime(self):
         """
         Returns the time the process has been scheduled in kernel and user
-        mode (including waiting for children) measured in clock ticks.
+        mode measured in clock ticks.
         """
         # 14 - utime (user time)
         # 15 - stime (kernel time)
@@ -200,6 +234,16 @@ class StaticProcess(usage.Usage, Process):
 
     def __str__(self):
         return "{} ({})".format(self.name, self.pid)
+
+    def debug_str(self):
+        return "{} ({}) [ruid={},uptime={:.1f}s]: cpu {:.3f}%, mem {:.3f}%".format(
+            self.name,
+            self.pid,
+            self.owner,
+            self.uptime,
+            self.usage["cpu"],
+            self.usage["mem"]
+        )
 
     def __hash__(self):
         return hash(self.name)
@@ -265,17 +309,70 @@ class ProcessInstance(Process):
     process.
     """
 
-    def __init__(self, pid, pss=False, swap=True):
+    def __init__(self, pid, pss=False, swap=True, clockticks=None,
+                 selective_pss_threshold=0.0):
         """
         Initializes the instantaneous usage information of a process.
         """
         super().__init__(pid)
+        # Cache these file so that subsequent calls to different parts of the
+        # same file are returned without reading again
+        self.proc_status_cache = None
+        self.proc_stat_cache = None
+
         self.name = self.curr_name()
         self.uptime = self.curr_uptime()
         self.owner = self.curr_owner()
+
+        if selective_pss_threshold > 0:
+            # Shared mem collection cost is mostly zero cost due to caching
+            # of /proc/pid/status
+            pure_shared_memory_bytes = self.curr_shared_memory_bytes()
+            file_backed_memory_bytes = self.curr_file_memory_bytes()
+            total_shared_memory_bytes = pure_shared_memory_bytes + file_backed_memory_bytes
+            if total_shared_memory_bytes < selective_pss_threshold:
+                pss = False
+
         self.memory_bytes = self.curr_memory_bytes(pss=pss, swap=swap)
         self.cputime = self.curr_cputime()
-        self.clockticks = cinfo.total_clockticks()
+
+        # We may get provided clockticks as an optimization
+        if not clockticks:
+            self.clockticks = sysinfo.clockticks()
+        else:
+            self.clockticks = clockticks
+
+    def proc_status(self, key):
+        """
+        Returns the value in /proc/self.pid/status by key without a newline
+        character. If the key doesn't exist, returns an empty string. May
+        throw a FileNotFoundError if the process disappears.
+        """
+        if not self.proc_status_cache:
+            with open("/proc/{}/status".format(self.pid)) as proc_status:
+                self.proc_status_cache = proc_status.read()
+
+        lines = self.proc_status_cache
+        match = re.search(key + r":\s+(.*)", lines)
+        if match:
+            try:
+                return match.group(1).strip()
+            except AttributeError:
+                pass
+        return ""
+
+    def proc_stat(self, *indexes):
+        """
+        Returns the value(s) at the indexes (nonzoro-based!) in
+        /proc/self.pid/stat. If the index is out of bounds, a IndexError is
+        raised. May also throw a FileNotFoundError if the process disappears.
+        See "man 5 proc" for details.
+        """
+        if not self.proc_stat_cache:
+            with open("/proc/{}/stat".format(self.pid)) as stat:
+                self.proc_stat_cache = stat.readline().split(" ")
+
+        return [self.proc_stat_cache[i - 1] for i in indexes]
 
     def __add__(self, other):
         raise TypeError(
@@ -312,7 +409,7 @@ class ProcessInstance(Process):
                         os.cpu_count(), 0) * 100,
                     "mem": (
                         (other.memory_bytes + self.memory_bytes) / 2
-                        / cinfo.total_mem
+                        / sysinfo.total_mem
                     ) * 100
                 }
             return StaticProcess(
@@ -336,4 +433,4 @@ def combo_procs_by_name(procs):
     new_procs = collections.defaultdict(lambda: 0)
     for proc in procs:
         new_procs[proc.name] += proc
-    return new_procs.values()
+    return list(new_procs.values())

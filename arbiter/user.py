@@ -1,17 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 """
 A module with utilities for storing information related to a specific user.
 """
 
-import time
 import collections
-import logging
+import copy
 import itertools
 import os
-import pwd
-import usage
-import cinfo
+
+import badness
+import cginfo
+import pidinfo
 import statuses
+import sysinfo
+import usage
 from cfgparser import cfg, shared
 
 
@@ -52,8 +57,10 @@ class User:
         The user's uid.
     gids: [int, ]
         A list of gids that the user belongs to.
-    cgroup: cinfo.UserSlice()
+    cgroup: cginfo.UserSlice()
         A cgroup obj representing the user.
+    uid_name: str
+        A uid, username pair (e.g. 1000 (username)).
     history: collections.deque(dict, )
         A list of history events ordered chronologically (i.e. most recent is
         first). History events are formatted as:
@@ -61,35 +68,20 @@ class User:
              "mem": float,
              "cpu": float,
              "pids": {int (pid): pidinfo.StaticProcess()}}
-    badness_history: collections.deque(dict, )
-        A list of badness history events ordered chronologically (i.e. most
-        recent is first). Badness events are formatted as:
-            {"timestamp": int,
-             "delta_badness": {"mem": float, "cpu": float},
-             "badness": {"mem": float, "cpu": float}}
-    badness_timestamp: int
-        A epoch timestamp for when the user's badness score goes above zero.
-        This is reset after the user's badness score goes to 0.
+    badness_obj: badness.Badness()
+        A badness object that scores usage and determines whether a violation
+        has occurred.
     status: statuses.Status()
         The status of the user. See statuses.get_status() for format.
-    cpu_usage: float
-        The average cpu usage of the user over the arbiter interval (as a
-        percent of a single core), averaged from collector events during the
-        arbiter interval.
-    mem_usage: float
-        The average mem usage of the user over the arbiter interval (as a
-        percentage of the entire machine), averaged from collector events
-        during the arbiter interval.
     cpu_quota: float
         The user's cpu quota (as a percent of a single core) based on their
-        current status.
+        current status group.
     mem_quota: float
         The user's memory quota (as a percentage of the entire machine) based
-        on their current status.
+        on their current status group.
     """
     __slots__ = ["uid", "gids", "cgroup", "username", "uid_name", "history",
-                 "badness_history", "badness_timestamp", "status",
-                 "cpu_usage", "mem_usage", "cpu_quota", "mem_quota"]
+                 "badness_obj", "status"]
 
     def __init__(self, uid):
         """
@@ -99,74 +91,121 @@ class User:
             The user's uid
         """
         self.uid = uid
-        self.gids = statuses.query_gids(self.uid)
-        self.cgroup = cinfo.UserSlice(self.uid)
+        self.gids = sysinfo.query_gids(self.uid)  # Assume this is fixed
+        self.cgroup = cginfo.UserSlice(self.uid)
         self.username = "?"
         try:
-            self.username = pwd.getpwuid(uid).pw_name
+            passwd = sysinfo.getpwuid_cached(uid)
+            self.username = passwd.pw_name
         except KeyError:
             pass
         self.uid_name = "{} ({})".format(self.uid, self.username)
-        self.status = statuses.get_status(uid)
+        # Placeholder until all statuses are bulk updated via main.py
+        self.status = statuses.lookup_empty_status(self.uid)
         self.history = collections.deque(maxlen=cfg.badness.max_history_kept)
-        self.badness_history = collections.deque(maxlen=cfg.badness.max_history_kept)
-        self.badness_timestamp = 0  # epoch when badness started increasing
-        self.set_badness({"cpu": 0.0, "mem": 0.0}, int(time.time()))
+        self.badness_obj = badness.Badness()
 
-    def set_badness(self, badness, record_time):
+    def history_iter(self, max_events=None):
         """
-        Sets and clears the badness history with the given badness.
+        Iterates over a copy of the user's history. If max_events is given, up
+        to the given number of events is yielded.
 
-        badness: dict
-            The new first badness.
-        record_time: float, int
-            Time in epoch that the badness was calculated.
+        max_events: int
+            The maximum number of events to iterate over.
         """
-        self.badness_history.clear()
-        self.badness_history.appendleft({
-            "timestamp": record_time,
-            "delta_badness": {"cpu": 0.0, "mem": 0.0},
-            "badness": badness
+        if not max_events:
+            num_events = len(self.history)
+        else:
+            num_events = min(max_events, len(self.history))
+
+        for event in itertools.islice(self.history, num_events):
+            yield copy.deepcopy(event)
+
+    def add_usage(self, collect_timestamp, cgroup_usage, per_process_usage,
+                  rhel7_compat=False):
+        """
+        Adds the given usage to the user's internal usage history.
+
+        collect_timestamp: int
+            An epoch timestamp for the time the usage was collected at.
+        cgroup_usage: cginfo.StaticUserSlice
+            A cginfo.StaticUserSlice object representing the user's cgroup
+            usage.
+        per_process_usage: dict
+            A dictionary of per-process (per per) usage, with the keys being
+            pid and the values being pidinfo.StaticProcess objects.
+        rhel7_compat: bool
+            Flag for whether to throw away the memory cgroup usage and replace
+            it with the sum of process memory due to it being tainted with
+            kernel memory.
+        """
+        # Irrational paranoia about dicts and objects being pointers...
+        copied_per_process_usage = copy.deepcopy(per_process_usage)
+        self.history.appendleft({
+            "time": collect_timestamp,
+            "cpu": cgroup_usage.usage["cpu"],
+            "mem": cgroup_usage.usage["mem"],
+            "pids": copied_per_process_usage
         })
-        if sum(badness.values()) == 0:
-            self.badness_timestamp = record_time
 
-    def add_badness(self, badness, delta_badness, record_time):
-        """
-        Imports new badness and prepends the new badness into the
-        self.badness_history accordingly.
+        summed_proc = pidinfo.StaticProcess(-1)  # Basically zero usage
+        if len(copied_per_process_usage) > 0:
+            # StaticProcess objects can be arbitrarily added together; usage
+            # is added, resulting combined metadata has no inutuitive meaning
+            summed_proc = sum(self.history[0]["pids"].values())
 
-        badness: dict
-            A new badness dictionary.
-        delta_badness: dict
-            The change in badness dictionary.
-        record_time: float, int
-            Time in epoch that the badness was calculated.
-        """
-        self.badness_history.appendleft({
-            "timestamp": record_time,
-            "delta_badness": delta_badness,
-            "badness": badness
-        })
+        if rhel7_compat:
+            self.history[0]["mem"] = summed_proc.usage["mem"]
 
-        # Set badness_timestamp when user starts gaining badness or loses it
-        if not self.badness_timestamp and sum(badness.values()) != 0:
-            self.badness_timestamp = record_time
-        elif self.badness_timestamp and sum(badness.values()) == 0:
-            self.badness_timestamp = 0
+        # Add a mark ('*') to the end of all whitelisted process names
+        self.mark_whitelisted_processes(self.history[0]["pids"].values())
 
-    def update_properties(self):
+        # Add "other processes", our notion of what we don't know: the
+        # difference between cgroup usage (accurate) and process usage (not
+        # that); can be whitelisted in config so users only get called out
+        # for usage we can identify the source of*
+        #
+        # *this is particularly relevent for whitelisting of compilers since
+        # there are lots of short high usage processes which cannot be
+        # identified easily
+        self.history[0]["pids"][-1] = pidinfo.StaticProcess(
+            -1,
+            usage={
+                "cpu": max(self.history[0]["cpu"] - summed_proc.usage["cpu"], 0),
+                "mem": max(self.history[0]["mem"] - summed_proc.usage["mem"], 0)
+            },
+            name=shared.other_processes_label + "**",
+            owner=self.uid
+        )
+
+    def update_badness_from_last_usage(self):
         """
-        Sets properties of the user.
+        Creates a new badness score from the last usage added.
         """
-        self.status = statuses.get_status(self.uid)
-        avg_cpu, avg_mem = self.avg_gen_usage()
-        self.cpu_usage = avg_cpu
-        self.mem_usage = avg_mem
-        cpu_quota, mem_quota = statuses.lookup_quotas(self.uid, self.status.current)
-        self.cpu_quota = cpu_quota
-        self.mem_quota = mem_quota
-        self.gids = statuses.query_gids(self.uid)
+        # Badness scores are zero when you are in penalty
+        if self.status.in_penalty():
+            return
+
+        # Calculate the delta badness dictionary based on latest collector data
+        cpu_usage, mem_usage = self.last_cgroup_usage()
+        whlist_cpu_usage, _ = self.last_proc_usage(whitelisted=True)
+
+        # Only subtract whlist_cpu_usage, since too much memory usage is still
+        # bad, regardless of whether it's whitelisted (it cannot be throttled
+        # once allocated).
+        usage_dict = {"cpu": cpu_usage - whlist_cpu_usage, "mem": mem_usage}
+        cpu_quota, mem_quota = self.status.quotas()
+        quotas_dict = {"cpu": cpu_quota, "mem": mem_quota}
+        self.badness_obj.update_with_usage(usage_dict, quotas_dict)
+
+    def set_badness(self, badness_obj):
+        """
+        Overrides a user's badness object with the one.
+
+        badness_obj: badness.Badness()
+            A badness object.
+        """
+        self.badness_obj = badness_obj
 
     def whitelisted_processes(self, processes):
         """
@@ -191,7 +230,7 @@ class User:
         for proc in whitelisted_procs:
             proc.name += "*"
 
-    def avg_gen_usage(self):
+    def last_cgroup_usage(self):
         """
         Returns the current average cgroup usage between the arbiter
         intervals.
@@ -210,7 +249,7 @@ class User:
             sum(mem_usages) / len(mem_usages) if mem_usages else 0.0
         )
 
-    def avg_proc_usage(self, whitelisted=False):
+    def last_proc_usage(self, whitelisted=False):
         """
         Returns the current average total process usage between the arbiter
         intervals.
@@ -233,8 +272,57 @@ class User:
         avg_proc = usage.average(*total_procs)
         return avg_proc.usage["cpu"], avg_proc.usage["mem"]
 
+    @property
+    def cpu_usage(self):
+        """
+        Returns the cgroup CPU usage over the last arbiter refresh interval.
+
+        Kept solely for backwards compatablity for integrations.py; deprecated.
+        """
+        return self.last_cgroup_usage()[0]
+
+    @property
+    def mem_usage(self):
+        """
+        Returns the cgroup memory usage over the last arbiter refresh interval.
+
+        Kept solely for backwards compatablity for integrations.py; deprecated.
+        """
+        return self.last_cgroup_usage()[1]
+
+    @property
+    def cpu_quota(self):
+        """
+        Returns the user's CPU quota as a percent of a core or CPU, depending
+        on the div_cpu_quotas_by_threads_per_core setting.
+
+        Kept solely for backwards compatablity for integrations.py; deprecated.
+        """
+        return self.status.quotas()[0]
+
+    @property
+    def mem_quota(self):
+        """
+        Returns the user's memory quota as a percent of the machine.
+
+        Kept solely for backwards compatablity for integrations.py; deprecated.
+        """
+        return self.status.quotas()[1]
+
     def new(self):
         """
         Returns whether the user is new (as in the obj created).
         """
-        return len(self.badness_history) <= 1
+        return len(self.history) <= cfg.general.history_per_refresh
+
+    def needs_tracking(self):
+        """
+        Returns whether the user should continued to be tracked.
+        """
+        has_occurrences = self.status.occurrences > 0
+        return (
+            self.cgroup.active()
+            or self.badness_obj.is_bad()
+            or self.status.in_penalty()
+            or has_occurrences
+        )

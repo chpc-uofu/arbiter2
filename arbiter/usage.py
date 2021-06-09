@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 """
 A module that contains a base class and methods related to storing usage
 information. This module is meant to be used for creating unique objects that

@@ -1,198 +1,233 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 """
 Makes decisions on what actions should be made based on a user.User() (Actions
 are "triggered"). These triggers, and the action calls are defined in
 evaluate(). This method is called every arbiter interval for each active user.
-
-For calculations of badness, calc_badness() calculates a user.User()'s delta
-badness score.
 """
 
 import logging
-import collections
 import time
+
+from cfgparser import cfg
 import actions
-import statuses
-import logdb
-from cfgparser import cfg, shared
 import integrations
+import statusdb
+import sysinfo
 
 logger = logging.getLogger("arbiter." + __name__)
 service_logger = logging.getLogger("arbiter_service")
 
 
-def evaluate(user_obj):
+def evaluate(user_obj, statusdb_obj, logdb_obj):
     """
     When run, checks the specified triggers and takes the specified action
     associated.
 
     user_obj: user.User()
         A user to evaluate.
+    statusdb_obj: statusdb.StatusDB
+        A StatusDB object to use.
+    logdb_obj: logdb.LogDB
+        A LogDB object to use.
     """
-    uid = user_obj.uid
-    uid_name = user_obj.uid_name
-    status = user_obj.status
-    username = "{} ({})".format(*integrations._get_name(uid))
-    badness = user_obj.badness_history[0]["badness"]
-    badness_score = sum(badness.values())
+    username = "{} ({})".format(*integrations._get_name(user_obj.uid))
 
-    # Get when released from penalty
-    timeout = -1
-    if statuses.lookup_is_penalty(status.current):
-        timeout = statuses.lookup_status_prop(status.current).timeout
-
-    if status.current != status.default:
-        logger.debug("%s has status: %s", uid_name, status)
+    if user_obj.status.in_penalty():
+        logger.debug("%s has status: %s", user_obj.uid_name, user_obj.status)
 
     # Only evaluate users who are not in penalty
-    if not statuses.lookup_is_penalty(status.current):
-        if badness_score >= 100:
-            logger.info("Increasing the penalty status of %s", uid_name)
-            new_status = _upgrade_penalty(user_obj)
-            service_logger.info("User %s was put in: %s", username, new_status)
+    if not user_obj.status.in_penalty():
 
-        # If the user is being bad
-        elif badness_score > 0:
-            logger.debug("%s has nonzero badness: %s", uid_name, badness)
-            service_logger.info("User %s has nonzero badness: %s", username,
-                                badness_score)
-            whlist_cpu_usage, whlist_mem_usage = user_obj.avg_proc_usage(whitelisted=True)
-            # Print out whitelisted usage vs normal usage for debugging
-            logger.debug("Whitelisted Usage: cpu %s, mem %s",
-                         whlist_cpu_usage, whlist_mem_usage)
-            logger.debug("Real Usage: %s", {
-                "cpu": user_obj.cpu_usage,
-                "mem": user_obj.mem_usage
-            })
-            if status.occurrences > 0:
-                # The user's usage should stay below the threshold in order to
-                # for the occurrences timeout to continue. Otherwise, we'll
-                # reset the timer here
-                user_obj.status = statuses.Status(
-                    current=status.current,
-                    default=status.default,
-                    occurrences=status.occurrences,
-                    timestamp=status.timestamp,
-                    occur_timestamp=int(time.time())
-                )
+        # We found ourseleves a violation!
+        if user_obj.badness_obj.is_violation():
+            upgrade_penalty(user_obj, username, statusdb_obj, logdb_obj)
 
-        elif _eval_lower_occurrences(badness, status):
-            logger.info("Lowering the occurrences count of %s", uid_name)
-            service_logger.info("User %s penalty occurrences has lowered to: "
-                                "%s", username, status.occurrences - 1)
-            if not statuses.update_occurrences(uid, -1, update_timestamp=True):
-                logger.warning("Occurrences couldn't be lowered since the user"
-                               "isn't in the status database!")
+        # If the user is being bad, no violation just yet
+        elif user_obj.badness_obj.is_bad():
+            log_user_badness(user_obj, username)
+            if user_obj.status.has_occurrences():
+                reset_occurrences_timeout(user_obj, username, statusdb_obj)
+
+        # The user is being good and occurrences has timed out
+        elif user_obj.status.has_occurrences() and user_obj.status.occurrences_expired():
+            lower_occurrences(user_obj, username, statusdb_obj)
 
     # Lower status for bad users past a certain time
-    # TODO (Dylan): Make this applicable to more than just penalty groups
-    elif time.time() - int(status.timestamp) >= timeout:
-        logger.info("Decreasing the penalty status of %s", uid_name)
-        new_status = _lower_penalty(user_obj)
-        service_logger.info("User %s is now in: %s", username, new_status)
+    elif user_obj.status.penalty_expired():
+        downgrade_penalty(user_obj, username, statusdb_obj)
 
     # If their in penalty, but haven't been released
-    elif timeout != -1:
-        timeleft = int(time.time()) - status.timestamp
+    else:
+        timeleft = int(time.time()) - user_obj.status.timestamp
         logger.debug("%s has spent: %s seconds in penalty of a required %s",
-                     uid_name, timeleft, timeout)
+                     user_obj.uid_name, timeleft, user_obj.status.penalty_timeout())
 
 
-def _eval_lower_occurrences(latest_badness, status):
+def upgrade_penalty(user_obj, username, statusdb_obj, logdb_obj):
     """
-    Evaluates whether a user's penalty needs to be lowered.
-    """
-    expected_lower_time = time.time() - cfg.status.penalty.occur_timeout
-    occurrences_timed_out = status.occur_timestamp < expected_lower_time
-    is_bad = sum(latest_badness.values()) != 0
-    return status.occurrences > 0 and occurrences_timed_out and not is_bad
-
-
-def _lower_penalty(user_obj):
-    """
-    Lowers the penalty status of a user.
+    Applies a penalty status to the user and sets lowered cgroup quotas.
 
     user_obj: user.User()
-        A user to lower the penalty of.
+        The user to update in statusdb.
+    username: str
+        The user's username.
+    statusdb_obj: statusdb.StatusDB
+        A StatusDB object to use.
+    logdb_obj: logdb.LogDB
+        A LogDB object to use.
     """
-    default_status = user_obj.status.default
-    actions.update_status(user_obj, default_status)
-    # Update timestamp of occurrences
-    statuses.update_occurrences(user_obj.uid, 0, update_timestamp=True)
-    actions.user_nice_email(user_obj.uid, default_status)
-    return default_status
+    logger.info("Increasing the penalty status of %s", user_obj.uid_name)
+    if not user_obj.status.authoritative():
+        logger.debug("Overriding previous authority %s of %s to upgrade "
+                     "penalty on %s", user_obj.status.authority,
+                     user_obj.uid_name, sysinfo.hostname)
 
+    new_status_group = user_obj.status.upgrade_penalty()
+    user_obj.badness_obj.reset()  # Penalized users are not evaluated; set to 0.0
 
-def _upgrade_penalty(user_obj):
-    """
-    Upgrades the penalty status of a user.
+    # Want to ensure badness drops to 0.0 in statusdb after violation,
+    # otherwise if there is db + arbiter failure then the user will get a 100
+    # badness when their penalty is dropped after arbiter restarts (possibly
+    # resulting in another violation immediately after). No garuantee here,
+    # but slightly safer than bulk update
+    try_update_statusdb_for_user(user_obj, statusdb_obj, include_badness=True)
 
-    user_obj: user.User()
-        A user to upgrade the penalty of.
-    """
-    new_status = actions.upgrade_penalty(user_obj)
+    if cfg.general.debug_mode:
+        logger.debug("Not setting quotas because debug mode is on.")
+    else:
+        actions.set_quotas(user_obj)
+
+    # Note which hosts the quotas will apply on
+    syncing_hosts = statusdb_obj.known_syncing_hosts()
 
     # Add the record of the action to the database
-    rotated_filename = logdb.rotated_filename(
-        cfg.database.log_location + "/" + shared.logdb_name,
-        shared.log_datefmt
-    )
-    logdb.add_action(new_status, user_obj.uid, user_obj.history,
-                     int(time.time()), rotated_filename)
+    logdb_obj.add_action(new_status_group, user_obj.uid,
+                         user_obj.history_iter(), int(time.time()))
 
-    actions.user_warning_email(user_obj, new_status)
-    return new_status
+    actions.user_warning_email(user_obj, new_status_group, syncing_hosts)
+    service_logger.info("User %s was put in: %s", username, new_status_group)
 
 
-def calc_badness(user_obj):
+def log_user_badness(user_obj, username):
     """
-    Computes a delta badness score. Returns a dict with "cpu" and "mem" delta
+    Logs out information to the debug and service logs about the user's
     badness.
 
     user_obj: user.User()
-        A user to calculate the badness of.
-
-    >>> _default_calc_badness()
-    {"cpu": 0.0, "mem": 52.356116402}
+        The user to update in statusdb.
+    username: str
+        The user's username.
     """
-    refresh = cfg.general.arbiter_refresh
-    time_to_max_bad = cfg.badness.time_to_max_bad
-    time_to_min_bad = cfg.badness.time_to_min_bad
-    mem_quota = user_obj.mem_quota
-    cpu_quota = user_obj.cpu_quota
+    logger.debug("%s has nonzero badness: %s", user_obj.uid_name,
+                 user_obj.badness_obj)
+    service_logger.info("User %s has nonzero badness: %s", username,
+                        user_obj.badness_obj.score())
 
-    whlist_cpu_usage, whlist_mem_usage = user_obj.avg_proc_usage(whitelisted=True)
-    # Only subtract whlist_cpu_usage, since too much memory usage is still
-    # bad, regardless of whether it's whitelisted (it cannot be throttled once
-    # allocated).
-    bad_mem = user_obj.mem_usage
-    bad_cpu = user_obj.cpu_usage - whlist_cpu_usage
+    whlist_cpu_usage, whlist_mem_usage = user_obj.last_proc_usage(whitelisted=True)
+    logger.debug("Whitelisted Usage: cpu %s, mem %s", whlist_cpu_usage,
+                 whlist_mem_usage)
+    cpu_cgroup_usage, mem_cgroup_usage = user_obj.last_cgroup_usage()
+    logger.debug("Real Usage: cpu %s, mem %s", cpu_cgroup_usage,
+                 mem_cgroup_usage)
 
-    Metric = collections.namedtuple("Metric", "quota usage threshold")
-    metrics = {
-        "mem": Metric(mem_quota, bad_mem, cfg.badness.mem_badness_threshold),
-        "cpu": Metric(cpu_quota, bad_cpu, cfg.badness.cpu_badness_threshold)
-    }
-    new_delta_badness = {}
-    for name, metric in metrics.items():
-        # Calculate the increase/decrease in badness (to translate the time
-        # and extreme scores to a change per interval)
-        max_incr_per_sec = 100.0 / (time_to_max_bad * metric.threshold)
-        max_incr_per_interval = max_incr_per_sec * refresh
-        max_decr_per_sec = 100.0 / time_to_min_bad
-        max_decr_per_interval = max_decr_per_sec * refresh
 
-        usage = metric.usage
-        # Make badness scores consistent between debug and non-debug mode or
-        # Optionally cap the badness increase by capping the usage
-        if cfg.general.debug_mode or cfg.badness.cap_badness_incr:
-            usage = min(metric.usage, metric.quota)
+def reset_occurrences_timeout(user_obj, username, statusdb_obj):
+    """
+    Resets the occurrences timeout for the user.
 
-        rel_usage = usage / metric.quota
-        if rel_usage >= metric.threshold:
-            change = rel_usage * max_incr_per_interval
-        else:
-            change = (1 - rel_usage) * -max_decr_per_interval
-        new_delta_badness[name] = change
-    return new_delta_badness
+    user_obj: user.User()
+        The user to update in statusdb.
+    username: str
+        The user's username.
+    statusdb_obj: statusdb.StatusDB
+        A StatusDB object to use.
+    """
+    # The user's usage should stay below the threshold in order to
+    # for the occurrences timeout to continue.
+    user_obj.status.reset_occurrences_timeout()
+    try_update_statusdb_for_user(user_obj, statusdb_obj)
+    logger.info("Resetting the occurrences timeout of %s", user_obj.uid_name)
+    service_logger.info("User %s penalty occurrences timeout has been reset "
+                        "due to nonzero badness", username)
 
+
+def lower_occurrences(user_obj, username, statusdb_obj):
+    """
+    Lowers the occurrences count for the user.
+
+    user_obj: user.User()
+        The user to update in statusdb.
+    username: str
+        The user's username.
+    statusdb_obj: statusdb.StatusDB
+        A StatusDB object to use.
+    """
+    user_obj.status.lower_occurrences()
+    try_update_statusdb_for_user(user_obj, statusdb_obj)
+    logger.info("Lowering the occurrences count of %s", user_obj.uid_name)
+    service_logger.info("User %s penalty occurrences has lowered to: "
+                        "%s", username, user_obj.status.occurrences)
+
+
+def downgrade_penalty(user_obj, username, statusdb_obj):
+    """
+    Downgrades a penalty tier for the user.
+
+    user_obj: user.User()
+        The user to update in statusdb.
+    username: str
+        The user's username.
+    statusdb_obj: statusdb.StatusDB
+        A StatusDB object to use.
+    """
+    logger.info("Decreasing the penalty status of %s", user_obj.uid_name)
+    # When downgrading penalty we make the status authoritative, but we
+    # don't want to rely on this authoritativeness for whether to send a
+    # email
+    old_authority = user_obj.status.authority
+    was_authoritative = user_obj.status.authoritative()
+    new_status_group = user_obj.status.downgrade_penalty()
+
+    # Ensure user has a fresh start; this _shouldn't_ be needed since we
+    # drop badness to zero on a violation, but if for whatever reason that
+    # fails (e.g. db write failure -> arbiter failure) then we don't want
+    # to remember their old badness
+    user_obj.badness_obj.reset()
+    try_update_statusdb_for_user(user_obj, statusdb_obj, include_badness=True)
+
+    if cfg.general.debug_mode:
+        logger.debug("Not setting quotas for %s because debug mode is on.",
+                     user_obj.uid_name)
+    else:
+        actions.set_quotas(user_obj)
+
+    if was_authoritative:
+        # The other will send emails
+        actions.user_nice_email(user_obj.uid, new_status_group)
+        service_logger.info("User %s is now in: %s", username,
+                            new_status_group)
+    else:
+        logger.debug("Not sending emails because %s is not authoritative on %s (%s is)",
+                     user_obj.uid_name, sysinfo.hostname, old_authority)
+
+
+def try_update_statusdb_for_user(user_obj, statusdb_obj, include_badness=True):
+    """
+    Attempts to update the user's badness and status in statusdb. This should
+    be used sparingly as bulk updates is more preferable.
+
+    user_obj: user.User()
+        The user to update in statusdb.
+    include_badness: bool
+        Whether to write out the badness as well as status.
+    """
+    try:
+        statusdb_obj.set_status(user_obj.uid, user_obj.status)
+        if include_badness:
+            statusdb_obj.set_badness(user_obj.uid, user_obj.badness_obj)
+    except statusdb.common_db_errors as err:
+        logger.debug("Failed to update the user's new status/badness in "
+                     "statusdb for %s: %s", user_obj.uid_name, err)

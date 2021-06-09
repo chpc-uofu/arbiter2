@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+# SPDX-FileCopyrightText: Copyright (c) 2020 Idaho National Laboratory
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
 # A mini Arbiter2 that reports whether there is badness on the host. The exit
 # code can also be used to determine this. Requires Arbiter2's statusdb to be
 # set up (it is used to determine a user's status).
 #
-# Written by Dylan Gardner.
+# Written by Dylan Gardner
 # Usage ./badsignal.py
 import argparse
 import collections
@@ -22,9 +26,22 @@ def main(args):
     found_badness = False
     # We aren't arbiter, so likely don't have same permissions
     cfg.processes.pss = cfg.processes.pss & (os.geteuid() == 0)
-    collect = collector.Collector(1, args.interval, poll=2,
-                                  rhel7_compat=args.rhel7_compat)
-    _, users = collect.run()
+
+    arbiter_refresh = cfg.general.arbiter_refresh
+    history_per_refresh = cfg.general.history_per_refresh
+    poll = cfg.general.poll
+
+    repetitions = args.repetitions if args.repetitions else history_per_refresh
+    interval = args.interval if args.interval else arbiter_refresh / history_per_refresh
+    poll = args.poll if args.poll else poll
+
+    collector_obj = collector.Collector(
+        repetitions,
+        interval,
+        poll=poll,
+        rhel7_compat=args.rhel7_compat
+    )
+    _, users = collector_obj.run()
 
     for uid, user_obj in users.items():
         try:
@@ -32,16 +49,15 @@ def main(args):
             uid_name = f"{uid} ({username})"
         except KeyError:
             uid_name = str(uid)
-        cpu_usage = user_obj.cpu_usage
-        cpu_quota = user_obj.cpu_quota
-        mem_usage = user_obj.mem_usage
-        mem_quota = user_obj.mem_quota
+
+        cpu_usage, mem_usage = user_obj.last_cgroup_usage()
+        cpu_quota, mem_quota = user_obj.status.quotas()
 
         whlist_cpu_usage = 0
         if args.whitelist:
             # Recall that we only whitelist cpu usage since we can throttle it,
             # unlike memory.
-            whlist_cpu_usage, _ = user_obj.avg_proc_usage(whitelisted=True)
+            whlist_cpu_usage, _ = user_obj.last_proc_usage(whitelisted=True)
             cpu_usage -= whlist_cpu_usage
 
         is_bad_cpu = cpu_usage / cpu_quota > cfg.badness.cpu_badness_threshold
@@ -60,11 +76,25 @@ def main(args):
         if args.debug:
             debug_info = {
                 "Whitelisted Usage": (whlist_cpu_usage, 0.0),
-                "Processes": set(map(str, user_obj.history[0]["pids"].values())),
+                "Process Usage": user_obj.avg_proc_usage(whitelisted=False)
+            }
+            for event in range(repetitions)[::-1]:  # .history goes backwards
+                proc_list = list(user_obj.history[event]["pids"].values())
+                debug_info["Process Event {}".format(event)] = [
+                    proc.debug_str()
+                    for proc in usage.rel_sorted(
+                        proc_list,
+                        cpu_quota, mem_quota,
+                        key=lambda p: (p.usage["cpu"], p.usage["mem"]),
+                        reverse=True
+                    )
+                ]
+
+            debug_info.update({
                 "PSS on?": cfg.processes.pss,
                 "Memsw on?": cfg.processes.memsw,
                 "Memsw avail?": os.path.exists(memsw_path)
-            }
+            })
             for name, info in debug_info.items():
                 print("  {}: {}".format(name, info))
             print()
@@ -180,9 +210,20 @@ if __name__ == "__main__":
                         dest="configs")
     parser.add_argument("-i", "--interval",
                         type=int,
-                        default=0.5,
-                        help="The interval to average usage over.",
+                        help="The interval to average usage over. Defaults "
+                             "to cfg.general.arbiter_refresh // "
+                             "cfg.general.history_per_refresh.",
                         dest="interval")
+    parser.add_argument("-r", "--repetitions",
+                        type=int,
+                        help="How many collector repetitions to do. Defaults "
+                             "to cfg.general.history_per_refresh.",
+                        dest="repetitions")
+    parser.add_argument("-p", "--poll",
+                        type=int,
+                        help="How many collector polls per repetition to do. "
+                             "Defaults to cfg.general.poll.",
+                        dest="poll")
     parser.add_argument("--rhel7-compat",
                         action="store_true",
                         help="Run with a special configuration that allows "
@@ -212,6 +253,7 @@ if __name__ == "__main__":
                      dest="verbose")
     args = parser.parse_args()
     bootstrap(args)
+    import usage
     import collector
     from cfgparser import cfg
     sys.exit(main(args))

@@ -6,18 +6,13 @@ Documentation=https://gitlab.chpc.utah.edu/arbiter2/arbiter2
 Wants=sendmail.service sssd.service network.target network-online.target
 After=sendmail.service sssd.service network.target network-online.target
 
-# User slice cgroup accounting is enabled by Arbiter2 script with Slice= or
-# the -a flag. If enabling differently, may want to uncomment these.
-# ConditionControlGroupController=cpu mem
-# ConditionPathExistsGlob=/sys/fs/cgroup/cpu/user.slice/user-*.slice/ /sys/fs/cgroup/mem/user.slice/user-*.slice/
-
 [Service]
-
 # -- User Settings -- #
 # Run as unprivileged arbiter for security
 User=arbiter
-# Enable cgroup accounting by running in user.slice, instead of system.slice (default with Slice=)
-# TODO: Lookup uid of arbiter and put it here. Systemd's %U variable may work for system accounts
+# Enable cgroup accounting by running in user.slice, instead of system.slice (default with Slice=),
+# appears to only work for CentOS 7
+# TODO: Lookup uid of arbiter and put it here. Systemd's %U variable may work for local system accounts
 Slice=user-<ARBITER UID>.slice
 CPUAccounting=true
 MemoryAccounting=true
@@ -30,14 +25,12 @@ AmbientCapabilities=CAP_SYS_PTRACE
 
 # -- Runtime Settings -- #
 Type=simple
-# TODO: Set this to the arbiter directory!
-Environment=ARBITER_DIR=
-# TODO: Set the working directory; must be a absolute path, cannot contain a environment variable
-WorkingDirectory=/home/arbiter/
+# TODO: Set these to the arbiter directory! The working directory defaults to the arbiter/ dir since 
+#       Arbiter2 assumes ../etc exists (or -e flag) by default
+Environment=ARBITER_DIR=<ARBITER DIR>
+WorkingDirectory=<ARBITER DIR>/arbiter
 # TODO: Make sure the Python executable is correct and args are correct (try running this line)
-ExecStart=/usr/local/bin/python3.6 ${ARBITER_DIR}/arbiter/arbiter.py -g ../etc/config.toml -s  # RHEL7/CENTOS7: --rhel7-compat
-# It may be smart to put your configuration in it's own etc/sitename folder (with a copy of etc/) to make upgrading easier
-# ExecStart=/usr/local/bin/python3.6 ${ARBITER_DIR}/arbiter/arbiter.py -s -e ../etc/sitename -g ../etc/sitename/config.toml  # RHEL7/CENTOS7: --rhel7-compat
+ExecStart=<PYTHON EXE> ${ARBITER_DIR}/arbiter/arbiter.py -e ${ARBITER_DIR}/etc -g ${ARBITER_DIR}/etc/config.toml -s
 
 # -- Restarting Controls -- #
 # If Arbiter fails for some reason, we'll want to restart in that case
@@ -53,6 +46,6 @@ RestartPreventExitStatus=2
 
 [Install]
 # TODO: Adjust the WantedBy=
-# Some INTs boot to 'graphical.target' for virtualGL, may need to adjust
-# WantedBy=multi-user.target
-WantedBy=graphical.target
+# Some login nodes boot to 'graphical.target' for virtualGL, may need to adjust
+# WantedBy=graphical.target
+WantedBy=multi-user.target

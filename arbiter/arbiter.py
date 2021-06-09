@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
 
 """
@@ -8,15 +10,18 @@ modules context.
 
 import argparse
 import logging
-import sys
 import os
-import logger
-import cinfo
-import cfgparser
-import permissions
+import sys
+import time
 import toml
 
+import cfgparser
+import cginfo
+import logger
+import permissions
+
 startup_logger = logging.getLogger("arbiter_startup")
+startup_logger.setLevel(logging.DEBUG)
 service_logger = logging.getLogger("arbiter_service")
 debug_logger = logging.getLogger("arbiter")
 
@@ -61,12 +66,11 @@ def arguments():
                         dest="exit_file")
     parser.add_argument("--rhel7-compat",
                         action="store_true",
-                        help="Run arbiter with a special configuration that "
-                             "allows for compatability with rhel7/centos7 "
-                             "(Kernel 3.10). Among other things, this "
-                             "configuration replaces memory acct from cgroups "
-                             "with pid memory data. See the install guide "
-                             "for more information.",
+                        help="Deprecated; custom RHEL/CentOS 7 compatability "
+                             "mode no longer needed. Among other things, "
+                             "this flag still causes Arbiter2 to internally "
+                             "replace memory usage from cgroups with process "
+                             "memory usage data.",
                         dest="rhel7_compat")
     parser.add_argument("-s", "--sudo",
                         action="store_true",
@@ -117,6 +121,15 @@ def arguments():
             print("No version file found.")
             sys.exit(1)
         sys.exit(0)
+
+    # --rhel7-compat is not longer needed since we get cgroup data from the
+    # memory.stat file now, rather than memory.usage_in_bytes which used to
+    # include kernel memory usage that couldn't be subtracted out due to a
+    # bug only in CentOS 7
+    if args.rhel7_compat:
+        startup_logger.warning("--rhel7-compat is deprecated; custom "
+                               "RHEL/CentOS 7 compatability mode is no longer "
+                               "needed (but the effect is still applied).")
 
     # insert the default etc/ path, used as a fallback
     insert("../etc")
@@ -217,10 +230,14 @@ def pre_run(args):
     cfg = cfgparser.cfg
 
     # Turn on accounting
+    startup_logger.info("Checking that cgroup accounting is enabled...")
     if args.acct_uid:
         startup_logger.info("Attempting to turn on accounting...")
         try:
-            success = permissions.turn_on_cgroups_acct(args.acct_uid)
+            success = permissions.turn_on_cgroups_acct(
+                args.acct_uid,
+                logger_instance=startup_logger
+            )
         except OSError as err:
             logger.debug(err)
             success = False
@@ -229,9 +246,9 @@ def pre_run(args):
             sys.exit(2)
 
     # Make sure cgroup hierarchy already exists
-    elif not cinfo.safe_check_on_any_uid(acct_on_for):
-        startup_logger.error("cgroup hierarchy doesn't exist (it can be "
-                             "turned on via the -a flag). Exiting.")
+    elif not acct_on():
+        startup_logger.error("cgroup hierarchy doesn't exist. See install "
+                             "guide. Exiting.")
         sys.exit(2)
 
     # Check permissions
@@ -242,7 +259,8 @@ def pre_run(args):
         cfg.processes.pss,
         cfg.processes.memsw,
         groupname=cfg.self.groupname,
-        min_uid=cfg.general.min_uid
+        min_uid=cfg.general.min_uid,
+        logger_instance=startup_logger
     )
     if not has_permissions:
         startup_logger.error("Arbiter does not have sufficient permissions "
@@ -257,7 +275,7 @@ def pre_run(args):
                             "mode is on.")
 
 
-def acct_on_for(uid, controllers=("memory", "cpu")):
+def acct_on(controllers=("memory", "cpu", "cpuacct")):
     """
     Returns whether accounting is on for a user.
 
@@ -266,21 +284,73 @@ def acct_on_for(uid, controllers=("memory", "cpu")):
     controllers: iter
         The cgroup controllers to check.
     """
-    cgroup = cinfo.UserSlice(uid)
-    acct_on = all(map(cgroup.controller_exists, controllers))
+    # First check that both memory, cpu and cpuacct is on globally. Then
+    # check user.slice, then per-user checking
+    root_slice = cginfo.SystemdCGroup("", "")
+    for controller in controllers:
+        if not root_slice.controller_exists(controller):
+            startup_logger.error("root cgroup controller %s does not exist "
+                                 "(%s).", controller,
+                                 root_slice.controller_path(controller))
+            return False
 
-    # The systemd controller should always exist, if it doesn't the user isn't
-    # on the machine. We use this to assert that the checks above aren't
-    # failing because the user has logged out, rather than just the acct not
-    # being on
-    # FIXME: This is another race condition (though very unlikely). If someone
-    #        logs out after they are picked for this check, but then log in
-    #        after the acct_on check then the systemd controller will exist
-    #        and the function will return that accounting is off, rather than
-    #        raise a FileNotFoundError even when accounting may be on.
-    if not acct_on and not cgroup.controller_exists("systemd"):
-        raise FileNotFoundError("The user disappeared!")
-    return acct_on
+    allusers_slice = cginfo.AllUsersSlice()
+    for controller in controllers:
+        if not allusers_slice.controller_exists(controller):
+            startup_logger.error("user.slice cgroup controller %s does not "
+                                 "exist (%s).", controller,
+                                 allusers_slice.controller_path(controller))
+            return False
+
+    our_uid = os.getuid()
+    while True:
+        # Hey lets not quietly spin if we're waiting for users to be on the
+        # machine (unlike previously).
+        #
+        # FIXME? it's kinda sorta ok to spin since there are no users on the
+        #        machine, but locking up Arbiter2 on startup doesn't sound
+        #        like a great user experience either, especially if our checks
+        #        are wrong... (they have been before).
+        if not cginfo.current_cgroup_uids():
+            startup_logger.info("Waiting for users on the machine to check "
+                                "for whether accounting is on for them...")
+
+        # CPUAccounting/MemoryAccounting for ourselves via the service file
+        # in newer systemd versions may not work (sometimes systemd only turns
+        # on acct for arbiter2.service, not for other users), so let's not
+        # trust ourselves to be the authority for whether accounting is on
+        for uid in cginfo.wait_till_uids(blacklist=(our_uid,)):
+            user_slice = cginfo.UserSlice(uid)
+            seen_controllers = tuple(filter(user_slice.controller_exists, controllers))
+            is_acct_on = len(seen_controllers) == len(controllers)
+            # FIXME: This is a race condition (though very unlikely). If
+            #        someone logs out after they are picked for the check,
+            #        but then log in after the seen_controllers check then
+            #        the systemd controller will exist and the function may
+            #        incorrectly return that accounting is off. I don't know
+            #        how to fix this... b/c we have to check at least three
+            #        different controllers atomicly
+            if not is_acct_on:
+                if not user_slice.controller_exists("systemd"):
+                    # User isn't in systemd controller; they disappeared,
+                    # don't trust the check for controllers
+                    startup_logger.debug("Skipping cgroup accounting check "
+                                         "with uid %s; disappeared while "
+                                         "checking.", uid)
+                    continue  # "for else:" will break out of double loop
+
+                missing_controllers = set(controllers) - set(seen_controllers)
+                missing_controllers_str = ", ".join(missing_controllers)
+                startup_logger.error("user.slice/user-%s.slice cgroup "
+                                     "controller(s) %s does not exist.", uid,
+                                     missing_controllers_str)
+                return False
+            break  # It's all good, "for else:" won't be triggered
+        else:
+            # No valid users, try again
+            time.sleep(0.2)
+            continue
+        return True
 
 
 if __name__ == "__main__":

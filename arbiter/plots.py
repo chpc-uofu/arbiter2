@@ -1,15 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
-import datetime
-import collections
-import logging
-import itertools
-import matplotlib
+
 import copy
-matplotlib.use("Agg")  # Required for server (no displays)
+import datetime
+import itertools
+import logging
+import matplotlib
 import matplotlib.pyplot as plt
+matplotlib.use("Agg")  # Required for server (no displays)
+
 import pidinfo
 import usage
-
 
 logger = logging.getLogger("arbiter." + __name__)
 

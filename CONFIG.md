@@ -2,7 +2,7 @@
 The configuration is written in [toml](https://github.com/toml-lang/toml). The default configuration file is in `etc/config.toml`, but it can be changed with the `-g CONFIGS` flag. Additional configuration files can be appended to the `-g` flag (e.g. `-g CONFIG CONFIG2 ...`. These configration files will override the previous configuration listed in a cascading manner. The additional configuration files only need headers and values that will override the previous. The headers and values are listed below.
 
 ### Cascading configurations
-If Arbiter2 is being deployed to multiple nodes, it is recommended that config files are cascaded together. This simplifies future changes to configuration files. For example, CHPC has the following setup:
+If Arbiter2 is being deployed to multiple clusters on the same NFS file system, it is recommended that you have a base shared config, but with per-hostname files are cascaded together. This simplifies future changes to configuration files. For example, CHPC has a setup similar to the following:
 
 ```
 etc/config.toml
@@ -12,10 +12,13 @@ etc/cluster/_specifc-node2.toml
 
 In the example above, the `etc/config.toml` is a fully complete configuration that is the first `-g` argument. In `_specific-node1.toml` and `_specific-node2.toml` (either one is appended at the end of the `-g` toml list, depending on the node), there are only the overriding headers that contain non-global settings. When a global configuration value needs to be changed, only `etc/config.toml` needs to be changed.
 
+If you go this route, I'd recommend using the `%H` special value that inserts hostnames in systemd services so your `-g` list looks like `-g ${ARBITER_DIR}/etc/config.toml ${ARBITER_DIR}/etc/cluster/_%H.toml`.
+
 _Tip: Make your partial/overriding configurations start with a underscore to better identify them._
 
 ### Special values
-Adding the following to a string will replace the value with the defined value below.
+
+Adding the following to a string value in the configuration will replace the special key with the defined value below.
 
 | Name | Special Value | Replacement |
 | --- | --- | --- |
@@ -23,17 +26,20 @@ Adding the following to a string will replace the value with the defined value b
 | Environment Varaibles | `${VAR}` | _replaced with the $VAR enviroment variable or a blank space if no such variable exists_ |
 
 ### Testing the configuration
+
 Inside of `tools/`, there is a file called `cfgparser.py`. This is a python program that you can use to test if your configuration is valid or to print out the resulting configuration with the `-p` flag. The tests run are the tests used when Arbiter2 starts up, so failing any one of these tests (including pedantic ones) implies that the resulting configuration might not work when running Arbiter2. There are a couple pedantic tests that check for directories, folders and even ping the mail server, but these can be skipped with the `--non-pedantic` flag (useful if you are testing the configuration on a different machine than the one you are deploying to). Run `cfgparser.py --help` inside of tools to see all the options.
+
+You may also find the `--eval-specials` and `--hide-defaults` flags useful.
 
 ## General `[general]`
 
 **debug_mode**: `boolean`
 
-- Debug mode prevents limits from being written and emails from being sent to users. It also prepends debug information in emails (which is only sent to admins). Because limits/quotas are not set, so long as `pss = false` (see below), any unprivledged user can run Arbiter2 in this mode.
+- Debug mode prevents limits from being written and emails from being sent to users and only goes to admins set in `email.admin_emails`. It also prepends debug information in emails (which is only sent to admins). Because limits/quotas are not set, so long as `pss = false` (see below), any unprivledged user can run Arbiter2 in this mode.
 
 **arbiter_refresh**: `int` (greater or equal to 5)
 
-- How often Arbiter2 evaluates users for violations in seconds and applies the status quotas of new users.
+- How often Arbiter2 evaluates users for violations in seconds and applies the quotas of new users.
 
 **history_per_refresh**: `int` (greater or equal to 1)
 
@@ -60,7 +66,7 @@ Inside of `tools/`, there is a file called `cfgparser.py`. This is a python prog
 **max_history_kept**: `int` (greater or equal to 1)
 
 - The maximum number of history "events" to keep at any moment.
-- Plots will be generated from this information, meaning the max time length of a plot is the max_badness_kept. i.e.  `max_plot_timespan_in_secs = max_history_kept * history_per_refresh * arbiter_refresh`
+- Plots will be generated from this information, meaning the max time length of a plot is the `max_badness_kept`. i.e.  `max_plot_timespan_in_secs = max_history_kept * history_per_refresh * arbiter_refresh`
 
 **cpu_badness_threshold**: `float` (less than or equal to 1)
 
@@ -148,13 +154,44 @@ time_to_min_bad_with_usage = 100 / badness_change_per_interval
 
 _Note: the database header must still exist in the toml file, even if all the values are defaulted._
 
-**log_location** _(optional/defaulted: "../logs/%H"): `string`
+**log_location** _(optional/defaulted: "../logs/%H")_: `string`
 
 - The location (either relative to `arbiter.py` or an abspath) where to store the status database (statuses.db), the log database (logdb.db), the rotated plaintext debug log (debug) and service log (log).
 
 **log_rotate_period** _(optional/defaulted: 7)_: `int` (greater or equal to 1)
 
 - How long the databases should be rotated for in days. An empty log will be created, even if there are no events for a period.
+
+**statusdb_url**  _(optional/defaulted: "sqlite:///cfg.database.log\_location/statuses.db")_: `string`
+
+- A url (RFC 1738) pointing to a database. If not provided, Arbiter2 will use a sqlite status database (statuses.db) at the log_location. A valid url is formatted as: `dialect+driver://username:password@host:port/database`. See below for details on each component.
+    - _dialect+driver_: Arbiter2 uses the SQLAlchemy Python module to interface with various databases. This module (and thus Arbiter2) supports interfacing with PostgreSQL ("postgresql"), MySQL ("mysql"), Oracle ("oracle"), Microsoft SQL Server ("mssql") and SQLite\* ("sqlite") databases. This is the dialect part of the url. The driver on the other hand is the Python module used to drive the interfacing. The full list of drivers supported by sqlalchemy can be found at the link below. If left unspecified (e.g. `mysql://` rather than `mysql+pymysql://`), then the following Python modules are used by SQLAlchemy (and must be installed):
+        - _oracle_: "cx_oracle",
+        - _mssql_: "pyodbc",
+        - _postgresql_: "psycopg2",
+        - _mysql_: "mysqlclient" (but personally, we recommend manually specifying and using "pymysql" as in our experiences the setup is easier),
+        - _sqlite3_: "" (supported without a external module)
+    - _username_: The username.
+    - _password_: The password. Note that Arbiter may log out the url in it\'s logs, but the password field is replaced with "REDACTED".
+    - _host_: The hostname or IP of the database.
+    - _port_: The port of the database. This can be left out if the database runs on a dialect's default port.
+    - _database_: The name of the database to use. A good name might just be "arbiter".
+
+- The database user must be able to create tables and modify them in the database.
+
+- The format for a sqlite* database is different: `sqlite:///<path>`. If the path is absolute you will have four leading slashes.
+
+See the [sqlalchemy docs](https://docs.sqlalchemy.org/en/13/core/engines.html#database-urls) for details on support for databases and Python SQL interfaces.
+
+If multiple Arbiter2 instances point to the same database and have the same `sync_group` (see below), their statuses will be synchronized. Otherwise, they will be left to their own devices. **It is recommended that the [synchronization document](SYNCHRONIZATION.md) is read before deployment.**
+
+_Note: The log database (logdb.db) is always stored as a local sqlite database at the configured log\_location._
+
+_Note: If multiple Arbiter instances point to the same statusdb (e.g. for synchronization), then sqlite will not work as a shared statusdb database! This is due to the behavior of networked file systems ubiquitous in HPC environments. In this case a remote database such as MySQL, PostgreSQL or Microsoft SQL Server must be used. The [sqlite3 docs provide more details on why](https://sqlite.org/faq.html#q5)._
+
+**statusdb_sync_group** _(optional/defaulted: "")_: `str`
+
+- If multiple Arbiter2 instances share the same database, then instances with the configured sync group here will synchronize statuses with each other. If you do not want synchronization between instances, it is recommended that "%H" (hostname special value) is used; this is not the default due to backwards compatibility with existing sqlite statusdb databases.
 
 ## Processes `[processes]`
 
@@ -165,6 +202,24 @@ _Note: the database header must still exist in the toml file, even if all the va
 **pss**: `boolean`
 
 - Arbiter2 can optionally use PSS (proportional shared size) for pid memory collection, rather than RSS (resident shared size). PSS has the advantage of correctly accounting for shared memory between processes, but requires special read access to /proc/<pid>/smaps if Arbiter2 is not run as root (See the install guide). RSS counts the shared memory for every process, sometimes leading to extreme and inaccurate memory usage reporting when multiple processes share memory.
+
+- PSS does however, cause excessive CPU usage that scales with the total amount of memory used on a particular node. The `pss_threshold` configuration below can help alleviate this.
+
+**pss_threshold**: _(optional/defaulted: 4 MiB)_ `int`
+
+- When PSS is enabled for pid memory collection and there are lots of processes, this collection can cause the system CPU usage to skyrocket thanks to the kernel having to walk process page tables (and holding an impactful lock while doing it). To avoid this cost, Arbiter2 only collects PSS for processes with a shared memory size above the configured threshold in bytes (i.e. for processes where the shared memory is large enough for sharing between processes to make a difference).
+
+There are several things to consider when choosing this threshold:
+
+1. When Arbiter2 does not collect PSS due to the reported shared memory being below this threshold, it is effectively overcounting at most the total shared memory of a particular process. If there are more than one consumer of a shared memory mapping, this overcounting is then multiplied by the number of consumers. This multiplication effect effectively means that in the worst realistic case, the overcounting for each collection of shared processes (e.g. `mpirun`, `java`) is likely this threshold times the number of consumer processes (likely the number of logical or physical cores if users are smart about their choice).
+
+2. The kernel doesn't provide very precise shared memory information in `/proc/<pid>/{status,statm}`; The actual difference between this number and an accurate one found in `/proc/<pid>/smaps` has been observed to be on the order of megabytes on CHPC systems (and perhaps more). In effect, this forces your estimatation of the worst case overcounting detailed above to be a underestimate when this is taken into account.
+
+3. Shared memory may not be shared. File backed memory is technically shared memory, even if only one process has mapped a particular file into memory. It is expensive for the kernel to count the consumers of a mapping, so this can result in the shared memory reported by the kernel in `/proc/<pid>/{status,statm}` (used to determine whether to use PSS) possibly being an overcount of actual usage if there is signficant use of single process file-backed memory...
+
+The privileged tool `tools/proc_shmem_diff.sh` bundled can be used to observe some of this nuance.
+
+A default of 4 MiB was choosen based on an observation that on CHPC systems few proceses use above 4MiB of shared memory or PSS memory and nearly all processes that significantly used shared memory and contributed to historical violations were above this threshold. Given that CHPC's memory threshold is 4GiB of memory, this is somewhat of a conservative estimate to compensate for the uncertainty of non-PSS reported shared memory, despite heavy single-consumer file-backed memory overcounting. It may be worth increasing this if you notice Arbiter2 still chewing up a lot of CPU time.
 
 **whitelist_other_processes** _(optional/defaulted: true)_: `boolean`
 

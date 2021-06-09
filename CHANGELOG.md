@@ -1,5 +1,50 @@
 # Changelog
 
+## Version 2.0.0
+
+**Changes:**
+
+- Add multi-login node syncronization. This can be implicitly enabled by having multiple Arbiter2 instances use the same remote database (it cannot be the default sqlite database `statuses.db`, though it can be a MySQL/MariaDB, PostgreSQL or Microsoft SQL Server) via the `statusdb_url` configuration option. If this option is not set, Arbiter will default to a local sqlite database at the configured log location (which includes using existing `statuses.db` databases). Note that Arbiter does not import previous statuses (i.e. penalties) from the old statuses databases found in the log location when `statusdb_url` is first added. Furthermore, new sqlite `statuses.db` databases created by Arbiter2 version 2 are not compatabile with older Arbiter versions, however older databases are compatable with this version. The log databases (`logdb.db`) have not changed.
+    - It is recommended that the [SYNCHRONIZATION.md](SYNCHRONIZATION.md) document be read before deploying. It explains how and what Arbiter2 synchronizes between nodes.
+- Create a new Prometheus exporter: `tools/arbiter_exporter.py` that will export User cgroup usage, badness, and Arbiter2's configuration.
+- Introduce new shared memory threshold for whether to collect the PSS memory metric for a particular process. This should help decrease Arbiter2's CPU usage on nodes with high amounts of memory usage.
+- Added some small optimizations to help reduce CPU usage when Arbiter is collecting per-process usage.
+
+**Bugfixes:**
+- Logged out when Arbiter2 is waiting for users to log onto the machine instead of silently waiting. Background: Upon startup, Arbiter2 will check for whether the per-user CPU and memory cgroup hierarchy exists before proceeding with it's normal operations. This hierarchy can only be checked if there is a user logged in, so Arbiter2 blocks until there are users logged in (this is ok because if there are no users logged in, Arbiter2 has nothing to do).
+- Fixed an issue on some CentOS 8 machines that caused Arbiter2 to lock up on startup. This was because Arbiter2 assumed that the `cpu` and `cpuacct` controllers were both mounted at `cpu,cpuacct`.
+
+**Upgrading steps (with git):**
+1. git stash
+2. git pull
+3. git stash pop
+4. Optionally add a `statusdb_url` option in the `database` section of the configuration file to point to a shared remote database. See the [CONFIG.md file](CONFIG.md) for more details.
+5. Install the `sqlalchemy` module (`pip3 install sqlalchemy`). If you are using a remote database for syncronization you will also need to install a sqlalchemy compatiable driver for the dialect of the remote database you have choosen. A full list of compatable databases and drivers to install can be found in the [CONFIG.md file](CONFIG.md).
+6. Modify the `warning_email_body` function in `etc/integrations.py` to add an additional `warning_email_body` parameter. This parameter provides a list of hosts that this particular host is syncing with. The template `etc/integrations.py` file contains provides an example of using this.
+7. Run `./tools/cfgparser.py <path-to-config> [overriding-configs]` to check that your modifications work out.
+8. Restart the arbiter service: `systemctl restart arbiter2`
+
+**Upgrading steps (without git):**
+1. Clone the new update into a new directory
+2. Copy the old configuration file over (if applicable).
+3. Optionally add a `statusdb_url` option in the `database` section of the configuration file to point to a shared remote database. See the [CONFIG.md file](CONFIG.md) for more details.
+4. Install the `sqlalchemy` module (`pip3 install sqlalchemy`). If you are using a remote database for syncronization you will also need to install a sqlalchemy compatiable driver for the dialect of the remote database you have choosen. A full list of compatable databases and drivers to install can be found in the [CONFIG.md file](CONFIG.md).
+5. Modify the `warning_email_body` function in `etc/integrations.py` to add an additional `warning_email_body` parameter. This parameter provides a list of hosts that this particular host is syncing with. The template `etc/integrations.py` file contains provides an example of using this.
+6. Run `./tools/cfgparser.py <path-to-config> [overriding-configs]` to check that your modifications work out.
+7. Restart the arbiter service: `systemctl restart arbiter2`
+
+**example:**
+```
+mkdir arbiter2/2.0.0
+git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/2.0.0
+cp arbiter2/1.3.2/etc/config.toml arbiter2/2.0.0/etc
+ln -s arbiter2/2.0.0 arbiter2/latest
+pip3 install sqlalchemy  # required for v2.0.0
+vim arbiter2/2.0.0/etc/config.toml
+pip3 install pymysql      # if using a remote MySQL database (`statusdb_url = "mysql+pymysql://arbiter:PASSWORD@organization.edu/arbiter_statusdb"`)
+systemctl restart arbiter2
+```
+
 ## Version 1.4.0
 
 **Changes:**
@@ -22,7 +67,6 @@
 - Clarified that a user's occurrences timeout is reset when they have a nonzero badness score. Previously we explained that the occur_timeout "starts when a user has a badness score of 0 and is not in a penalty status", which may or may not imply that the occurrences timeout resets when you have a nonzero badness score.
 - Prevented users with non-zero occurrnces from being untracked, leading to erroneous values in Arbiter's databases. This bug revolved around the fact that Arbiter2 is supposed to untrack users when they've logged out, their statuses are their default (the same as if they just logged into the machine) and they have zero occurrences (no history of violations). Unfortunately we didn't check for the last condition when untracking users, which has lead to the statusdb (statuses.db) database being filled with erroneous entries that are never removed. Arbiter2 itself can deal with this, but it causes a problem for tools/ such as `arb2influx.py` since they read statuses.db and end up pushing out erroneous violations. **To fix this issue in existing statuses.db databases, a `cleanup-statuses.py` tool/ has been created. This should be run upon upgrade and the usage will be described below**.
 - Fixed inconsistent log database rotations. New empty databases will now be created, even if there are no events during the log rotation period. Furthermore, new databases will be aligned to the previous rotation.
-
 
 **Upgrading steps (with git):**
 1. git stash
@@ -54,6 +98,8 @@ cd tools
 systemctl restart arbiter2
 ```
 
+
+
 ## Version 1.3.3
 
 **Changes:**
@@ -62,18 +108,18 @@ systemctl restart arbiter2
 - Log out usernames along with uids for easier grepping.
 - Log out that Arbiter2 has started. This makes it easier to see whether Arbiter2 is waiting on permissions checks or just taking a second to collect user usage.
 
-**Upgrading steps (with git):**
+**upgrading steps (with git):**
 1. git stash
 2. git pull
 3. git stash pop
-4. Restart the arbiter service: `systemctl restart arbiter2`
+4. restart the arbiter service: `systemctl restart arbiter2`
 
-**Upgrading steps (without git):**
-1. Clone the new update into a new directory
-2. Copy the old configuration file over (if applicable).
-3. Restart the arbiter service: `systemctl restart arbiter2`
+**upgrading steps (without git):**
+1. clone the new update into a new directory
+2. copy the old configuration file over (if applicable).
+3. restart the arbiter service: `systemctl restart arbiter2`
 
-**Example:**
+**example:**
 ```
 mkdir arbiter2/1.3.3
 git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.3.3

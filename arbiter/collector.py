@@ -1,16 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 """
 A module containing objects/methods for collecting information.
 """
 
-import time
-import logging
 import collections
-import user
-import usage
+import logging
+import time
+
+import cginfo
 import pidinfo
-import cinfo
-from cfgparser import cfg, shared
+import sysinfo
+import timers
+import usage
+import user
+from cfgparser import cfg
 
 logger = logging.getLogger("arbiter." + __name__)
 
@@ -40,7 +46,7 @@ class Collector(object):
         self.poll = poll if poll >= 2 else 2
         self.interval = interval
         self.users = {}
-        self.allusers = cinfo.StaticAllUsersSlice()
+        self.allusers = cginfo.StaticAllUsersSlice()
         self.allusers_hist = []
         self.rhel7_compat = rhel7_compat
         # Keep track of seen no passwd users so we don't spam the debug log
@@ -61,7 +67,7 @@ class Collector(object):
         Refreshes the internal users dictionary by adding new users that
         haven't been seen before.
         """
-        active_uids = cinfo.current_cgroup_uids(min_uid=cfg.general.min_uid)
+        active_uids = cginfo.current_cgroup_uids(min_uid=cfg.general.min_uid)
 
         # Sometimes there are users with sessions on a machine that aren't in
         # ldap because they've been removed up there at some point (have no
@@ -69,7 +75,7 @@ class Collector(object):
         # to query info about them (e.g. email addr,  username, groupnames,
         # realname). We'll warn about them once and ignore them.
         found_no_passwd_uids = set(
-            uid for uid in active_uids if not cinfo.passwd_entry(uid)
+            uid for uid in active_uids if not sysinfo.passwd_entry(uid)
         )
         for uid in self.no_passwd_uids.symmetric_difference(found_no_passwd_uids):
             logger.warning("Found a user without a passwd entry, ignoring: %s", uid)
@@ -87,14 +93,6 @@ class Collector(object):
         """
         self.allusers_hist = []
 
-    def _pre_collect(self):
-        """
-        Initializes the users to collect info on, with their history.
-        """
-        starttime = int(time.time())
-        for user_obj in self.users.values():
-            user_obj.history.appendleft({"time": starttime})
-
     def _post_run(self):
         """
         Computes the total usage from the sum of user cpu and memory.
@@ -103,46 +101,19 @@ class Collector(object):
             self.allusers = usage.average(*self.allusers_hist)
             if self.rhel7_compat:
                 self.allusers.usage["mem"] = sum(
-                    user_obj.mem_usage for user_obj in self.users.values()
+                    user_obj.last_proc_usage()[1]  # cpu, mem
+                    for user_obj in self.users.values()
                 )
         else:
-            self.allusers = cinfo.StaticAllUsersSlice()
-
-    def _post_collect(self):
-        """
-        Modifies the history of users to add post-collect values.
-        """
-        for uid, user_obj in self.users.items():
-            user_history = user_obj.history[0]
-            summed_proc = pidinfo.StaticProcess(-1)
-            if user_history["pids"]:  # If there are processes
-                summed_proc = sum(user_history["pids"].values())
-
-            if self.rhel7_compat:
-                # Replace general memory (cgroup) with process memory
-                user_history["mem"] = summed_proc.usage["mem"]
-
-            # Add a mark to the end of all whitelisted process names
-            user_obj.mark_whitelisted_processes(user_history["pids"].values())
-
-            # Add "other processes"
-            user_history["pids"][-1] = pidinfo.StaticProcess(
-                -1,
-                usage={
-                    "cpu": max(user_history["cpu"] - summed_proc.usage["cpu"], 0),
-                    "mem": max(user_history["mem"] - summed_proc.usage["mem"], 0)
-                },
-                name=shared.other_processes_label + "**",
-                owner=uid
-            )
+            self.allusers = cginfo.StaticAllUsersSlice()
 
     def collect(self):
         """
         Collects information into each user's history.
         """
-        self._pre_collect()
         waittime = self.interval / self.poll
-        timer = TimeRecorder()
+        timer = timers.TimeRecorder()
+        collect_timestamp = int(time.time())
 
         allusers_instant_histories = []
         gen_instant_histories = collections.defaultdict(list)
@@ -155,7 +126,7 @@ class Collector(object):
 
             # Collect Overall General Metrics: CPU, Memory (AllUsersSliceInstance())
             try:
-                allusers_instant_histories.append(cinfo.AllUsersSliceInstance())
+                allusers_instant_histories.append(cginfo.AllUsersSliceInstance())
             except OSError as err:
                 logger.debug(err)
                 continue
@@ -164,7 +135,7 @@ class Collector(object):
                 # Collect General Metrics: CPU, Memory (UserSliceInstance())
                 pids = []
                 try:
-                    user_slice = cinfo.UserSliceInstance(
+                    user_slice = cginfo.UserSliceInstance(
                         uid,
                         memsw=cfg.processes.memsw
                     )
@@ -174,11 +145,30 @@ class Collector(object):
                     continue
 
                 # Collect Process Metrics: CPU, Memory (ProcessInstance())
+
+                # Reading smaps is insanely slow (when done for 2,000 procs,
+                # 180GiB of usage, takes ~30s!), so we'll only selectively do
+                # this for certain processes with a large enough shared memory
+                # size for overcounting of RSS to make a difference.
+                pss_thresh = 0
+                if cfg.processes.pss:
+                    pss_thresh = cfg.processes.pss_threshold
+
+                # Normally clockticks is called within ProcessInstance(...),
+                # but with thousands of processes, this adds up significantly.
+                # We lose some accuracy here, particuarly because parsing
+                # smaps can cause seconds of latency with large shared memory
+                # usage patterns without smaps_rollup, but this should be
+                # isolated to high shmem users and cgroup accuracy should save
+                # us here
+                clockticks = sysinfo.clockticks()
                 for pid in pids:
                     try:
                         processes_instant_histories[user_obj][pid].append(
                             pidinfo.ProcessInstance(pid, pss=cfg.processes.pss,
-                                                    swap=cfg.processes.memsw)
+                                                    swap=cfg.processes.memsw,
+                                                    clockticks=clockticks,
+                                                    selective_pss_threshold=pss_thresh)
                         )
                     except OSError as err:
                         if err.errno == 13:
@@ -186,7 +176,7 @@ class Collector(object):
                             # /proc/<pid>/smaps
                             logger.warning(err)
 
-            delta = timer.delta
+            delta = timer.delta()
             if delta <= 0:
                 logger.debug("Timing of collection poll is behind by %.5f seconds", -delta)
             time.sleep(max(0, delta))
@@ -202,21 +192,20 @@ class Collector(object):
                 )
             )
 
+        # Finally update the user objects with calculated usage
         for user_obj in self.users.values():
             # -1 since we have one less static obj than instant obj after combo
             # Average UserSliceInstance() into StaticUserSlice()
+            static_user_slice = cginfo.StaticUserSlice(user_obj.uid)
             if len(gen_instant_histories[user_obj]) >= 2:
-                userslice = usage.average(
+                # Cannot avg a single instantaneous user slice
+                static_user_slice = usage.average(
                     *usage.combine(*gen_instant_histories[user_obj]),
                     by=div_by
                 )
-                user_obj.history[0].update(userslice.usage)
-            else:
-                # Cannot avg a single instantaneous user slice
-                user_obj.history[0].update(usage.metrics.copy())  # empty metrics
 
             # Average ProcessInstance() into StaticProcess()
-            user_obj.history[0]["pids"] = {
+            per_process_usage = {
                 pid: usage.average(
                     *usage.combine(*processes),
                     by=div_by
@@ -224,7 +213,12 @@ class Collector(object):
                 for pid, processes in processes_instant_histories[user_obj].items()
                 if len(processes) >= 2   # Cannot avg a single instant process
             }
-        self._post_collect()
+            user_obj.add_usage(
+                collect_timestamp,
+                static_user_slice,
+                per_process_usage,
+                rhel7_compat=self.rhel7_compat
+            )
 
     def run(self):
         """
@@ -238,40 +232,5 @@ class Collector(object):
         for _ in range(self.repetitions):
             self.collect()
 
-        # Add properties like looking up statuses, quotas, etc...
-        for uid, user_obj in self.users.items():
-            user_obj.update_properties()
-
         self._post_run()
         return self.allusers, self.users
-
-
-class TimeRecorder(object):
-    """
-    Accurately record changes in time.
-    """
-
-    def __init__(self):
-        self.start_time = time.time()
-        self.waittime = 0
-
-    def start_now(self, waittime):
-        """
-        Starts the time recorder.
-        """
-        self.waittime = waittime
-        self.start_time = time.time()
-
-    @property
-    def delta(self):
-        """
-        Returns how much waiting is left.
-        """
-        return self.waittime - self.time_since_start
-
-    @property
-    def time_since_start(self):
-        """
-        Returns the amount of time since the start time.
-        """
-        return time.time() - self.start_time

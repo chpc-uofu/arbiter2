@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+
 import logging
 from logging import handlers
 
@@ -55,3 +58,6 @@ debug_logger.setLevel(logging.DEBUG)
 startup_logger = logging.getLogger("arbiter_startup")
 startup_logger.setLevel(logging.DEBUG)
 add_stream(startup_logger)  # Always stream the startup logger
+
+null_logger = logging.getLogger("null")
+null_logger.addHandler(logging.NullHandler())  # Optionally silencer

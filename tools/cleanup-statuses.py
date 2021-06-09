@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
 # Cleans up the given status databases (before 1.4.0, Arbiter2 did not
 # properly maintain and cleanup it's statusdb).
 #
@@ -15,15 +18,22 @@ import toml
 
 
 def main(args):
+    if not args.database_locs:
+        args.database_locs = [cfg.database.log_location + "/statuses.db"]
+
     for db in args.database_locs:
+        statusdb_url = "sqlite:///" + db
+        statusdb_obj = statusdb.lookup_statusdb(statusdb_url)
+
         refresh_margin = cfg.general.arbiter_refresh * 5
-        status_config = statuses.StatusConfig(
-            status_loc=db,
-            status_table=shared.status_tablename
-        )
 
         # Go through each status and potentially remove that user
-        user_statuses = statuses.read_status(status_config=status_config)
+        try:
+            user_statuses  = statusdb_obj.read_status()
+        except statusdb.common_db_errors as err:
+            print("Failed to access statusdb {}: {}".format(db, err))
+            continue
+
         for uid, status in user_statuses.items():
             uid = int(uid)
 
@@ -34,23 +44,13 @@ def main(args):
             # This causes problems if you make the assumption that every user
             # you see has a passwd entry, so we'll remove the record of them
             # here. Arbiter2 ignores these users and can deal with this, but
-            # scripts that query statusdb typically don't properly do this.
+            # it's unnecessary cruft.
             try:
                 username = pwd.getpwuid(uid).pw_name
             except KeyError:
                 print("Removing {} (?) in statuses because they don't have a "
                       "passwd entry".format(uid))
-                statuses.remove_user(uid, status_config=status_config)
-                continue
-
-            # This is called a "empty status" which basically means that the
-            # status is the default one they would be given by Arbiter on
-            # startup (not to be confused with the default status group, which
-            # is used to restore a user's current status group from penalty)
-            if status.current == status.default and status.occurrences == 0:
-                print("Removing {} ({}) in statuses because they have a "
-                      "empty status".format(uid, username))
-                statuses.remove_user(uid, status_config=status_config)
+                statusdb_obj._remove_user(uid)
                 continue
 
             # This really shouldn't happen since the non-cleanup bug before
@@ -63,7 +63,7 @@ def main(args):
                     print("Removing {} ({}) in statuses because their "
                           "penalty has timed out ({}s)".format(uid, username,
                           (time.time() - int(status.timestamp) - timeout)))
-                    statuses.remove_user(uid, status_config=status_config)
+                    statusdb_obj._remove_user(uid)
                     continue
 
             # This was a major bug with Arbiter2 before 1.4.0 where it'd
@@ -81,11 +81,16 @@ def main(args):
                           "occurrences has timed out ({}s)".format(uid,
                           username, (time.time() - int(status.occur_timestamp)
                           - timeout)))
-                    statuses.remove_user(uid, status_config=status_config)
+                    statusdb_obj._remove_user(uid)
                     continue
 
-        user_badness = statuses.read_badness(status_config=status_config)
-        for uid, badness in user_badness.items():
+        try:
+            user_badness = statusdb_obj.read_badness()
+        except statusdb.common_db_errors as err:
+            print("Failed to access statusdb {}: {}".format(db, err))
+            continue
+
+        for uid, badness_obj in user_badness.items():
             uid = int(uid)
             try:
                 # See above (statuses section) for an explaination
@@ -93,25 +98,25 @@ def main(args):
             except KeyError:
                 print("Removing {} (?) in badness because they don't have a "
                       "passwd entry".format(uid))
-                statuses.remove_user(uid, status_config=status_config)
+                statusdb_obj._remove_user(uid)
                 continue
 
-            last_updated = int(badness.pop("timestamp"))
-            if all(score == 0.0 or score == 0 for score in badness):
+            if badness_obj.is_good():
                 print("Removing {} ({}) in badness because their badness is"
                       "zero".format(uid, username))
-                statuses.remove_badness(uid, status_config=status_config)
+                statusdb_obj.remove_badness(uid)
                 continue
 
             # This was a major bug with Arbiter2 before 1.4.0 where it'd
             # never remove a user's badness from statusdb (in fact it didn't
-            # even have the functionality to do so!) Yikes!
+            # even have the functionality to do so!). This just causes extra
+            # cruft to be left in the database, slowing down queries slightly.
             if (args.badness_timeouts and
                     (time.time() - last_updated >= refresh_margin)):
                 print("Removing {} ({}) in badness because their badness has "
                       "timed out ({}s)".format(uid, username, (time.time() -
                       last_updated - refresh_margin)))
-                statuses.remove_badness(uid, status_config=status_config)
+                statusdb_obj.remove_badness(uid)
 
 
 def bootstrap(args):
@@ -123,7 +128,8 @@ def bootstrap(args):
     # changing directories. Otherwise, configuration files would be relative to
     # the arbiter/ directory
     args.configs = [os.path.abspath(path) for path in args.configs]
-    args.database_locs = [os.path.abspath(path) for path in args.database_locs]
+    if args.database_locs:
+        args.database_locs = [os.path.abspath(path) for path in args.database_locs]
     os.chdir(args.arbdir)
     insert(args.arbdir)
     import cfgparser
@@ -133,9 +139,6 @@ def bootstrap(args):
                   "above). You can investigate this with the cfgparser.py "
                   "tool.")
             sys.exit(2)
-        if not args.database_locs:
-            cfg, shared = cfgparser.cfg, cfgparser.shared
-            args.database_locs = [cfg.database.log_location + "/" + shared.statusdb_name]
     except (TypeError, toml.decoder.TomlDecodeError) as err:
         print("Configuration error:", str(err), file=sys.stderr)
         sys.exit(2)
@@ -199,8 +202,9 @@ def arbiter_environ():
 
 
 if __name__ == "__main__":
-    desc = ("Cleans up the given status databases (before 1.4.0, Arbiter2 "
-            "did not properly maintain and cleanup it's own statusdb...).")
+    desc = ("Cleans up the given status sqlite databases (before 1.4.0, "
+            "Arbiter2 did not properly maintain and cleanup it's own "
+            "statusdb...). Only necessary when upgrading to 1.4.0.")
     parser = argparse.ArgumentParser(description=desc)
     arb_environ = arbiter_environ()
     parser.add_argument("-a", "--arbdir",
@@ -223,9 +227,9 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--database",
                         type=str,
                         nargs="*",
-                        help="Pulls from the specified database(s). Defaults "
-                             "to the database in the location specified in "
-                             "the configuration.",
+                        help="Pulls from the specified sqlite database(s). "
+                             "Defaults to the database in the location "
+                             "specified in the configuration.",
                         dest="database_locs")
     parser.add_argument("--ignore-penalty-timeouts",
                         action="store_true",
@@ -248,6 +252,7 @@ if __name__ == "__main__":
                         dest="badness_timeouts")
     args = parser.parse_args()
     bootstrap(args)
+    import statusdb
     import statuses
     from cfgparser import shared, cfg
     main(args)

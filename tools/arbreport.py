@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
 # A program to read log database files and extract data, such as the number of
 # violations by user and the number of times a process was encountered. The
 # script optionally sends an email. This can be used to periodically check the
@@ -150,17 +153,18 @@ def main(
         directory = pair[0].split(log_location)[1].replace("/", "")
 
         try:
-            log_info = logdb.get_log_info(filename)
-            actions_tab, general, processes = log_info[0], log_info[1], log_info[2]
+            logdb_obj = logdb.LogDB(filename)
+            actions = logdb_obj.read_actions()
 
             # Action: action, user, timestamp
             # General: mem, cpu, time
             # Process: name, mem, cpu, uptime, timestamp
 
             # Get users and penalties
-            for each in actions_tab:
-                user = each[1].user
-                description = each[1].action
+            keys_by_procs = {}
+            for action_obj in actions:
+                user = action_obj.user
+                description = action_obj.action
                 # logdb files may contain high_usage_warning actions, which are
                 # not applied to any specific user (rather, to the node in
                 # general); we want to skip those for user-specific analyses
@@ -183,22 +187,21 @@ def main(
                 else:
                     hosts_by_user[user][directory] += 1
 
-            # Count the number of times each process name is seen in a unique
-            # action (a penalty state elevation).
-            keys_by_procs = {}
-            for each in processes:
-                primary_key = each[0]  # The primary key associates the Process
-                                       # to an Action to avoid double-counting
-                proc = each[1]
-                if proc.name.startswith(shared.other_processes_label):
-                    continue
-                key = proc.name.replace(" ", "_")
-                if key not in keys_by_procs:
-                    keys_by_procs[key] = []
-                if primary_key not in keys_by_procs[key]:
-                    keys_by_procs[key].append(primary_key)
-                if key and key not in procs_seen:
-                    procs_seen.append(key)
+                # Count the number of times each process name is seen in a unique
+                # action (a penalty state elevation).
+                for process_obj in action_obj.process:
+                    primary_key = action_obj   # The primary key associates the Process
+                                               # to an Action to avoid double-counting
+                    if process_obj.name.startswith(shared.other_processes_label):
+                        continue
+                    key = process_obj.name.replace(" ", "_")
+                    if key not in keys_by_procs:
+                        keys_by_procs[key] = []
+                    if primary_key not in keys_by_procs[key]:
+                        keys_by_procs[key].append(primary_key)
+                    if key and key not in procs_seen:
+                        procs_seen.append(key)
+
             # Collapse the primary keys into a count for each process
             # This shows how many actions the process name is associated with;
             # this is necessary because there are multiple Process objects for
@@ -211,8 +214,8 @@ def main(
 
         except:
             print(
-                "Could not read database {}. It is possible the schema is not "
-                "correct. Skipping.".format(filename)
+                "Could not read database {}: {}. It is possible the schema is "
+                "not correct. Skipping.".format(filename, err)
             )
             continue
 

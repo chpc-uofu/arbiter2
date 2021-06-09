@@ -1,15 +1,15 @@
 <img src="resources/arbiter2.png" width="150px" />
 
 # Arbiter2
-Arbiter2 monitors and protects interactive nodes with [cgroups](https://en.wikipedia.org/wiki/Cgroups). It records the activity on nodes, automatically sets limits on the resources available to each user, and notifies users and administrators by email when resource quotas are changed. A technical paper has been written on the program and is [available on the ACM Digital Library](https://doi.org/10.1145/3332186.3333043).
+Arbiter2 monitors and protects interactive nodes with [cgroups](https://en.wikipedia.org/wiki/Cgroups). It records the activity on nodes, automatically sets limits on the resources available to each user, and notifies users and administrators by email when users are penalized for using excessive resources. Arbiter2 can also optionally synchronize these penalties and the states of users across interactive nodes. A technical paper has been written on the program and is [available on the ACM Digital Library](https://doi.org/10.1145/3332186.3333043) and the [primary author's homepage](https://dylngg.github.io/resources/arbiterTechPaper.pdf).
 
-Arbiter2 is written by the [University of Utah Center for High Performance Computing](https://www.chpc.utah.edu/).
+Arbiter2 is written by the [University of Utah Center for High Performance Computing](https://www.chpc.utah.edu/), with some contributions from [Idaho National Laboratory](https://inl.gov).
 
 ## Installation
-The installation instructions are [available in INSTALL.md](INSTALL.md).
+The installation instructions are [available in INSTALL.md](INSTALL.md). If synchronization capabilities are used, it is recommended that the [synchronization document](SYNCHRONIZATION.md) be read.
 
 ## Changes to this project
-To review modifications, see [CHANGELOG.md](CHANGELOG.md).
+To review modifications and to see how to upgrade versions, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Tools for monitoring and managing users
 
@@ -32,10 +32,7 @@ Default Status:          admin
 ```
 
 ### Checking the configuration
-A configuration can be checked for basic valididty using the [cfgparser.py](tools/cfgparser.py) tool. This tool also allows admins to print out the config with hidden and special variables in the resulting configuration.
-
-### Viewing logs
-Information in logs can be viewed quickly with the [logsearch](tools/logsearch/logsearch.md) utility.
+A configuration can be checked for basic validity using the [cfgparser.py](tools/cfgparser.py) tool. This tool also allows admins to print out the config with hidden and special variables in the resulting configuration.
 
 ### Getting periodic updates
 To get periodic updates about repeat offenders and processes that are seen frequently, use the [arbreport.py](tools/arbreport.py) tool. It allows administrators to see an overview of recent actions taken and can provide summary emails.

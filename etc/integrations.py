@@ -34,9 +34,83 @@ def warning_email_subject(hostname, severity, username, realname):
     )
 
 
+def format_cluster_hostname_list(hostnames):
+    """
+    Returns a formatted string with comma-seperated hostnames. If multiple
+    hostnames start with the same prefix and end with a digit (i.e. in the
+    same cluster), the hostnames are combined into a range expansion (e.g.
+    cluster[1-7]) if the digits are sequential and greater than two in the
+    count, or brace expansion (e.g. cluster{1,4,5}) otherwise.
+
+    Assumes cluster names are not prefix substrings of one another and that
+    digits don't have leading 0s. e.g. cannot have both f1 and frisco1 nor
+    frisco001.
+
+    hostnames: iter
+        An iterable of string hostnames to format.
+
+    >>> format_cluster_hostname_list(["np1", "kp1", "kp2", "f1", "f2", "f3"])
+    "f[1-3], kp{1,2}, and np1"
+    >>> format_cluster_hostname_list(["np1", "f1", "f2", "f3"])
+    "f[1-3] and np1"
+    >>> format_cluster_hostname_list(["f1", "f3"])
+    "f{1,3}"
+    """
+    uniq_hostnames = set(hostnames)  # Ensure no duplicates
+    prefixes = {hostname.rstrip("0123456789") for hostname in uniq_hostnames}
+
+    # A cluster is defined by having two or more hostnames with the same
+    # prefix with different ending digits
+
+    # Map prefixes to a set of trailing digits found in hostnames; clusters
+    # will be a subset of the prefixes where > 1 digits
+    prefix_digits_map = collections.defaultdict(set)
+    for hostname in uniq_hostnames:
+        for prefix in prefixes:
+            # Note: Assumes no prefixes are leading substrings of one another
+            if hostname.startswith(prefix):
+                maybe_digits = hostname[len(prefix):]
+                if maybe_digits.isdigit():
+                    # Note: This int() is problematic for formatting with leading zeros
+                    prefix_digits_map[prefix].add(int(maybe_digits))
+
+    # Now we know the cluster names and their corresponding digits
+    cluster_digits_map = {
+        prefix: prefix_digits_map[prefix]
+        for prefix in prefix_digits_map
+        if len(prefix_digits_map[prefix]) > 1
+    }
+    # All the other hostnames that didn't match the cluster criteria
+    not_clustered_hostnames = {
+        hostname
+        for hostname in uniq_hostnames
+        # Note: Assumes no prefixes are leading substrings of one another
+        if not any(hostname.startswith(cluster) for cluster in cluster_digits_map.keys())
+    }
+
+    formatted_hostnames = []
+    for cluster, digits in cluster_digits_map.items():
+        min_digit, max_digit = min(digits), max(digits)
+        is_sequential = max_digit - min_digit == len(digits)-1  # ok b/c unique digits
+        if len(digits) > 2 and is_sequential:
+            formatted_hostnames.append("{}[{}-{}]".format(cluster, min_digit, max_digit))
+        else:
+            # {{ -> just one '{' with .format()
+            formatted_hostnames.append("{}{{{}}}".format(cluster, ",".join(map(str, sorted(digits)))))
+
+    formatted_hostnames.extend(not_clustered_hostnames)
+    formatted_hostnames.sort()
+    if len(formatted_hostnames) > 1:
+        return (", ".join(formatted_hostnames[:-1]) +
+                ("," if len(formatted_hostnames) > 2 else "") +  # oxford comma
+                " and " + formatted_hostnames[-1])
+    else:
+        return formatted_hostnames[0]
+
+
 def warning_email_body(proc_table, username, realname, hostname,
                        timestamp, status_group, cpu_pct, default_core_text,
-                       time_in_state, mem_pct, default_mem):
+                       time_in_state, mem_pct, default_mem, syncing_hosts):
     """
     Prepares the body of a warning message.
 
@@ -61,10 +135,12 @@ def warning_email_body(proc_table, username, realname, hostname,
     time_in_state: int
         How many minutes till the user is released from their status.
     mem_pct: float
-        The user's current quota, as a percent of the user"s default quota.
+        The user's current quota, as a percent of the user's default quota.
         e.g. 80.0 -> 80% of your original limit
-    default_mem:
+    default_mem: str
         The mem quota expressed in human terms. e.g. "8.0 GB"
+    syncing_hosts: [str, ]
+        A list of hosts that Arbiter2 is syncing with.
     """
     # Prepare a message body using the template
     with open("../etc/warning_email_template.txt", "r") as template:
@@ -79,7 +155,8 @@ def warning_email_body(proc_table, username, realname, hostname,
         default_core_text,
         time_in_state,
         mem_pct,
-        default_mem
+        default_mem,
+        format_cluster_hostname_list(syncing_hosts),
     )
     message += proc_table
     return message

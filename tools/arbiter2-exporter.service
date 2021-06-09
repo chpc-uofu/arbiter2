@@ -1,0 +1,31 @@
+[Unit]
+Description=Arbiter2 Prometheus Exporter
+Documentation=https://gitlab.chpc.utah.edu/arbiter2/arbiter2
+# TODO: May need to change these depending on your setup (like adding network file system target)
+# Requires network to send mail and correctly get the hostname
+Wants=sendmail.service sssd.service network.target network-online.target
+After=sendmail.service sssd.service network.target network-online.target arbtier2.service
+Requisite=arbiter2.service
+
+[Service]
+# Run as unprivileged arbiter for security
+User=arbiter
+
+Type=simple
+# TODO: Set this to the arbiter directory!
+Environment=ARBITER_DIR=
+# TODO: Set the working directory; must be a absolute path, cannot contain a environment variable
+WorkingDirectory=/home/arbiter/
+# TODO: Make sure the Python executable is correct and args are correct (try running this line)
+ExecStart=/usr/local/bin/python3.6 ${ARBITER_DIR}/tools/arbiter_exporter.py -a ${ARBITER_DIR}/arbiter -g ../etc/config.toml -p 9765
+
+Restart=on-failure
+# If there is a configuration or argument issue, Arbiter2 exits with a error
+# code of 2. Don't restart in that case.
+RestartPreventExitStatus=2
+
+[Install]
+# TODO: Adjust the WantedBy=
+# Some INTs boot to 'graphical.target' for virtualGL, may need to adjust
+# WantedBy=multi-user.target
+WantedBy=graphical.target

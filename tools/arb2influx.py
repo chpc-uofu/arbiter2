@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
 # A program that reads status databases and sends the associated information,
 # such as statuses and badness scores, to an InfluxDB instance. This is largely
 # a proof-of-concept for integrating Arbiter2 with monitoring infrastructure.
@@ -7,13 +10,16 @@
 # Written by Robben Migacz
 # Usage: ./arb2influx.py (to see available arguments)
 import argparse
-import shlex
-import pwd
+import functools
 import grp
 import os
+import pwd
+import shlex
 import sys
-import toml
 import time
+import toml
+import urllib.parse
+import netrc
 import influxdb
 
 # These parameters likely need to be adjusted
@@ -25,7 +31,14 @@ password = ""
 db = ""
 
 
+# Cache the results so we don't have to do two lookups for statuses and badness
+# 4096 penalties is extremely unlikely but no harm with large values here
+@functools.lru_cache(maxsize=4096)
 def get_user_info(uid):
+    """
+    Returns a username, groupname pair for the given uid or None if the user
+    doesn't have a passwd entry.
+    """
     uid = int(uid)  # Ensure an integer is used as the uid (or it won't work)
     # Try to get the username and group ID
     try:
@@ -35,7 +48,7 @@ def get_user_info(uid):
         group = grp.getgrgid(groupid).gr_name
     except:
         return None
-    return (str(username), str(group))
+    return username, group
 
 
 def to_influx(
@@ -59,63 +72,52 @@ def to_influx(
         sys.exit(1)
 
 
+def parse_statusdb_url(args):
+    """
+    Given args, return the correct statusdb url.
+    """
+    # Local sqlite database
+    if args.database_loc:
+        return "sqlite:///{}".format(args.database_loc)
+    # Provided URL
+    elif args.statusdb_url:
+        return args.statusdb_url
+    # Resolve to what statusdb_url is when empty in the config
+    elif cfg.database.statusdb_url == "":
+        return "sqlite:///{}".format(cfg.database.log_location + "/statuses.db")
+    # Use statusdb_url from the config
+    else:
+        return cfg.database.statusdb_url
+
+
 def main(args):
     """Reads status databases and formats as JSON
     """
     json_body = []
-    files_to_read = []
-    # FIXME? This assumes the hostname is the last field in the path!
-    # With other log hierarchies, this probably won't work.
-    log_location = "/".join(cfg.database.log_location.split("/")[:-2])
+    statusdb_url = parse_statusdb_url(args)
+    statusdb_obj = statusdb.lookup_statusdb(statusdb_url)
 
-    # Walk the log location and get filenames
-    walked = os.walk(log_location)
-    for (directory, subdirectories, files) in walked:
-        files_to_read.extend(
-            [[directory, f]  # Keep hostname, filename
-             for f in files
-             if f == shared.statusdb_name]  # Keep only the relevant files
-        )
+    badness_timeout = cfg.general.arbiter_refresh * 2
+    try:
+        user_hosts_status = statusdb_obj.read_raw_status()
+    except statusdb.common_db_errors as err:
+        print("Failed to access statusdb:", err)
+        sys.exit(1)
 
-    for pair in files_to_read:
-        directory = os.path.join(pair[0], pair[1])
-        # A bit of an ugly hack to get the hostname (FIXME?)
-        hostname = directory.replace(shared.statusdb_name, "").replace(log_location, "").replace("/", "")
-        filename = pair[1]
+    for uid, hosts_status in user_hosts_status.items():
+        user_info = get_user_info(uid)
+        # Skip users with no passwd entry (see collector.refresh_uids)
+        if not user_info:
+            continue
 
-        status_config = statuses.StatusConfig(
-            status_loc=directory,
-            status_table=shared.status_tablename
-        )
-        user_statuses = statuses.read_status(status_config=status_config)
-        user_badness_vals = statuses.read_badness(status_config=status_config)
-
-        # Collect information about each user
-        uids = []
-        for uid in user_statuses.keys():
-            uids.append(uid)
-        for uid in user_badness_vals.keys():
-            uids.append(uid)
-        user_info_map = {}
-        for uid in set(uids):
-            user_info = get_user_info(uid)
-            if user_info:
-                user_info_map[uid] = user_info
-
-        current_time = int(time.time())
-
-        for uid, status in user_statuses.items():
-            if not uid in user_info_map:
-                continue
-            # Skip old points, which will clutter plots
-            if current_time - status.timestamp > cfg.general.arbiter_refresh * 2:
-                continue
+        username, group = user_info
+        for hostname, status in hosts_status.items():
             json = {
                 "measurement": "arbiter_status",
                 "tags": {
                     "user": uid,
-                    "username": user_info_map[uid][0],
-                    "group": user_info_map[uid][1],
+                    "username": username,
+                    "group": group,
                     "hostname": hostname
                 },
                 "fields": {
@@ -128,28 +130,40 @@ def main(args):
             }
             json_body.append(json)
 
-        for uid, badness in user_badness_vals.items():
-            if not uid in user_info_map:
-                continue
-            # Skip old points, which will clutter plots
-            if current_time - badness["timestamp"] > cfg.general.arbiter_refresh * 2:
-                continue
-            json = {
-                "measurement": "arbiter_badness",
-                "tags": {
-                    "user": uid,
-                    "username": user_info_map[uid][0],
-                    "group": user_info_map[uid][1],
-                    "hostname": hostname
-                },
-                "fields": {
-                    "cpu": badness["cpu"],
-                    "mem": badness["mem"],
-                    "timestamp": badness["timestamp"]
-                }
+    try:
+        user_badness = statusdb_obj.read_badness()
+    except statusdb.common_db_errors as err:
+        print("Failed to access statusdb:", err)
+        sys.exit(1)
+
+    for uid, badness_obj in user_badness.items():
+        user_info = get_user_info(uid)
+        # Skip users with no passwd entry (see collector.refresh_uids)
+        if not user_info:
+            continue
+
+        username, group = user_info
+        # Skip old points, which will clutter plots
+        if badness_obj.expired(timeout=badness_timeout):
+            continue
+
+        json = {
+            "measurement": "arbiter_badness",
+            "tags": {
+                "user": uid,
+                "username": username,
+                "group": group,
+                "hostname": hostname
+            },
+            "fields": {
+                "cpu": badness_obj.cpu,
+                "mem": badness_obj.mem,
+                "timestamp": badness_obj.last_updated()
             }
-            json_body.append(json)
-    to_influx(json_body)
+        }
+        json_body.append(json)
+
+    to_influx(json_body, username, password, host, port, db)
 
 
 def bootstrap(args):
@@ -170,9 +184,6 @@ def bootstrap(args):
                   "above). You can investigate this with the cfgparser.py "
                   "tool.")
             sys.exit(2)
-        if not args.database_loc:
-            cfg, shared = cfgparser.cfg, cfgparser.shared
-            args.database_loc = cfg.database.log_location + "/" + shared.statusdb_name
     except (TypeError, toml.decoder.TomlDecodeError) as err:
         print("Configuration error:", str(err), file=sys.stderr)
         sys.exit(2)
@@ -240,7 +251,8 @@ def arbiter_environ():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Arbiter to InfluxDB")
+    desc = "Exports arbiter measurements to given InfluxDB instance. "
+    parser = argparse.ArgumentParser(description=desc)
     arb_environ = arbiter_environ()
     parser.add_argument("-a", "--arbdir",
                         type=str,
@@ -259,13 +271,29 @@ if __name__ == "__main__":
                              "../etc/config.toml otherwise.",
                         default=arb_environ.get("ARBCONFIG", ["../etc/config.toml"]),
                         dest="configs")
-    parser.add_argument("-d", "--database",
+
+    env = parser.add_mutually_exclusive_group()
+    env.add_argument("-u", "--statusdb-url",
+                     type=str,
+                     help="Pulls from the specified statusdb url. Defaults "
+                          "to database.statusdb_url specified in the "
+                           "configuration.",
+                    dest="statusdb_url")
+    env.add_argument("-d", "--database",
+                     type=str,
+                     help="Pulls from the specified sqlite statusdb, rather "
+                          "than database.statusdb_url specified in the "
+                          "configuration.",
+                     dest="database_loc")
+    parser.add_argument("--netrc",
                         type=str,
-                        help="Pulls from the specified database. Defaults "
-                             "to the location specified in the configuration.",
-                        dest="database_loc")
+                        default=os.path.expanduser("~") + "/.netrc",
+                        help="Pulls InfluxDB authentication from the user's "
+                             ".netrc file or the specified one.",
+                        dest="netrc")
     args = parser.parse_args()
     bootstrap(args)
-    import statuses
+    import statusdb
+    import database
     from cfgparser import cfg, shared
     main(args)

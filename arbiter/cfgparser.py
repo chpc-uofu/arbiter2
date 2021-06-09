@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
 import argparse
 import copy
 import grp
 import logging
 import os
+import pwd
 import re
 import socket
 import sys
-import pwd
 import toml
+import urllib.parse
 
 
 logger = logging.getLogger("arbiter_startup")
@@ -63,9 +66,6 @@ shared = Configuration({
         "/sys/fs/cgroup/memory/user.slice/user-{}.slice/memory.memsw.limit_in_bytes"
     ],
     "other_processes_label": "other processes",
-    "statusdb_name": "statuses.db",
-    "status_tablename": "status",
-    "badness_tablename": "badness",
     "logdb_name": "log.{}.db",
     "debuglog_prefix": "debug",
     "servicelog_prefix": "log",
@@ -114,8 +114,23 @@ class Validate():
             A message appended to the error message.
         """
         self.check = check
-        self.err_message = "{}.{} = {} is not valid since it " + excuse
+        self.err_message = "%s.%s = %s is not valid since it " + excuse
         self.pedantic = pedantic
+
+    def log(self, context, key, value):
+        """
+        Logs a invalid configuration entry.
+        """
+        logger.error(self.err_message % (context, key, value))
+
+
+class ValidateRedactedURL(Validate):
+    """
+    Same as Validate, but redacts the value when logging.
+    """
+
+    def log(self, context, key, value):
+        logger.error(self.err_message % (context, key, redacted_url(value)))
 
 
 class Warn(Validate):
@@ -135,7 +150,13 @@ class Warn(Validate):
             A message appended to the error message.
         """
         super().__init__(check, "", pedantic=pedantic)
-        self.err_message = "{}.{} = {} " + excuse
+        self.err_message = "%s.%s = %s " + excuse
+
+    def log(self, context, key, value):
+        """
+        Logs a invalid configuration entry.
+        """
+        logger.warning(self.err_message % (context, key, value))
 
 
 def check_exception(check, exception, *args, **kwargs):
@@ -153,6 +174,19 @@ def check_exception(check, exception, *args, **kwargs):
         return check(*args, **kwargs)
     except exception:
         return False
+
+
+def redacted_url(url):
+    """
+    Redacts the url to prevent passwords from leaking.
+
+    url: str
+        A url.
+    """
+    parsed_result = urllib.parse.urlparse(url)
+    if parsed_result.password:
+        return url.replace(parsed_result.password, "REDACTED")
+    return url
 
 
 isaboveeq5 = Validate(
@@ -255,6 +289,71 @@ valid_mem_limit = Warn(
     "* bytes_in_gb > LLONG_MAX. The cgroup memory limit cannot be applied."
 )
 
+# See https://docs.sqlalchemy.org/en/13/dialects/index.html
+sqlalchemy_engines = [
+    "postgresql",
+    "postgresql+pg8000",
+    "postgresql+psycopg2",
+    "postgresql+psycopg2cffi"
+    "postgresql+py-postgresql",
+    "postgresql+pygresql",
+    "postgresql+zxjdbc",
+    "mysql",
+    # Isn't available on Python 3
+    # "mysql+mysqldb",
+    "mysql+mysqlclient",
+    "mysql+pymysql",
+    "mysql+mysqlconnector"
+    "mysql+cymysql",
+    "mysql+oursql",
+    "mysql+gaerdbms",
+    "mysql+pyodbc",
+    "mysql+zxjdbc",
+    "sqlite",
+    "sqlite+pysqlite",
+    "sqlite+pysqlcipher",
+    "oracle",
+    "oracle+cx_oracle",
+    "oracle+zxjdbc",
+    "mssql",
+    "mssql+pyodbc",
+    "mssql+mxodbc",
+    "mssql+pymssql",
+    "mssql+zxjdbc",
+]
+sqlalchemy_engines_default_modules = {
+        "oracle": "cx_oracle",
+        "mssql": "pyodbc",
+        "postgresql": "psycopg2",
+        # Technically the default with MySQL is 'mysqldb', but this is a
+        # Python 2 only module so we'll say the most common mysql module is
+        # the default here. It also appears that sqlalchemy detects modules if
+        # you don't specify one so things won't break if admins don't specify
+        # the engine, but install the following module.
+        "mysql": "pymysql",
+}
+
+valid_sqlalchemy_url = ValidateRedactedURL(
+    lambda url: (
+        check_exception(
+            lambda u: urllib.parse.urlparse(url).netloc != "", (ValueError, KeyError), url
+        )
+        if url != "" else True
+    ),
+    "appears that the sqlalchemy url (RFC 1738 format) is not valid. See "
+    "https://docs.sqlalchemy.org/en/13/core/engines.html#database-urls for more information."
+)
+sqlalchemy_engine_exists = ValidateRedactedURL(
+    lambda url: (
+        any(url.startswith(e) for e in sqlalchemy_engines)
+        if url != "" else True
+    ),
+    "is not a valid sqlalchemy engine. You can find those at "
+    "https://docs.sqlalchemy.org/en/13/dialects/index.html. The most common "
+    "ones are postgresql, sqlite (default if statusdb_url is blank), oracle, "
+    "mssql and mysql."
+)
+
 
 # Stores the validation protocols and layout of the base configuration.
 base_validation_config = {
@@ -303,11 +402,23 @@ base_validation_config = {
             int,
             isaboveeq1,
             default_value=7
-        )
+        ),
+        "statusdb_url": ValidationProtocol(
+            str,
+            valid_sqlalchemy_url,
+            sqlalchemy_engine_exists,
+            # if blank, will default to sqlite file at log_location
+            default_value=""
+        ),
+        "statusdb_sync_group": ValidationProtocol(
+            str,
+            default_value=""
+        ),
     },
     "processes": {
         "memsw": ValidationProtocol(bool, has_memsw),
         "pss": ValidationProtocol(bool),
+        "pss_threshold": ValidationProtocol(int, default_value=4194304),  # 4 MiB
         "whitelist_other_processes": ValidationProtocol(
             bool,
             default_value=True
@@ -581,15 +692,7 @@ def valid_value(validation_config, key, value, context, pedantic=True):
         if not pedantic and validity_check.pedantic:
             continue
         if validity_check.check(value) is not True:
-            log = logger.error
-            if isinstance(validity_check, Warn):
-                log = logger.warning
-            log(validity_check.err_message.format(
-                context,
-                key,
-                value,
-                validity_check.err_message
-            ))
+            validity_check.log(context, key, value)
             # If it's only a warning, don't die
             if isinstance(validity_check, Warn):
                 continue
@@ -770,4 +873,3 @@ if __name__ == "__main__":
         print(toml.dumps(resulting_config))
     elif load_config(*configs, pedantic=args.pedantic) is not True:
         sys.exit(2)
-

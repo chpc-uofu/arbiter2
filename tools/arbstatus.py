@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
+# Written by Dylan Gardner
+# Usage: ./arbstatus.py
+
 import argparse
 import shlex
 import getpass
@@ -10,19 +16,33 @@ import sys
 import toml
 
 
+def parse_statusdb_url(args):
+    """
+    Given args, return the correct statusdb url.
+    """
+    # Local sqlite database
+    if args.database_loc:
+        return "sqlite:///{}".format(args.database_loc)
+    # Provided URL
+    elif args.statusdb_url:
+        return args.statusdb_url
+    # Resolve to what statusdb_url is when empty in the config
+    elif cfg.database.statusdb_url == "":
+        return "sqlite:///{}".format(cfg.database.log_location + "/statuses.db")
+    # Use statusdb_url from the config
+    else:
+        return cfg.database.statusdb_url
+
+
 def main(args):
-    # Import here since the modules need to be imported based on args
-    status_config = statuses.StatusConfig(
-        status_loc=args.database_loc,
-        status_table=shared.status_tablename
-    )
-    status = statuses.get_status(
-        pwd.getpwnam(args.username).pw_uid,
-        status_config=status_config
-    )
+    statusdb_url = parse_statusdb_url(args)
+    statusdb_obj = statusdb.lookup_statusdb(statusdb_url)
+
+    status = statusdb_obj.get_status(pwd.getpwnam(args.username).pw_uid)
     timeout = float("inf")
     if statuses.lookup_is_penalty(status.current):
         timeout = statuses.lookup_status_prop(status.current).timeout
+
     timeleft = timeout - (time.time() - status.timestamp)
     # Cannot cast inf to int
     timeleft = int(timeleft) if timeleft != float("inf") else timeleft
@@ -31,17 +51,11 @@ def main(args):
         "Time Left": f"{timeleft}{'s' if timeleft != float('inf') else ''}",
         "Penalty Occurrences": status.occurrences,
         "Default Status": status.default,
+        "Authority": status.authority,
     }
-    print(format_properties(properties))
-
-
-def format_properties(properties):
-    """
-    Returns user readable status string.
-    """
-    return "\n".join(
+    print("\n".join(
         [f"{name + ':':<20}{val:>10}" for name, val in properties.items()]
-    )
+    ))
 
 
 def bootstrap(args):
@@ -62,9 +76,6 @@ def bootstrap(args):
                   "above). You can investigate this with the cfgparser.py "
                   "tool.")
             sys.exit(2)
-        if not args.database_loc:
-            cfg, shared = cfgparser.cfg, cfgparser.shared
-            args.database_loc = cfg.database.log_location + "/" + shared.statusdb_name
     except (TypeError, toml.decoder.TomlDecodeError) as err:
         print("Configuration error:", str(err), file=sys.stderr)
         sys.exit(2)
@@ -156,13 +167,23 @@ if __name__ == "__main__":
                              "../etc/config.toml otherwise.",
                         default=arb_environ.get("ARBCONFIG", ["../etc/config.toml"]),
                         dest="configs")
-    parser.add_argument("-d", "--database",
-                        type=str,
-                        help="Pulls from the specified database. Defaults "
-                             "to the location specified in the configuration.",
-                        dest="database_loc")
+    env = parser.add_mutually_exclusive_group()
+    env.add_argument("-u", "--statusdb-url",
+                     type=str,
+                     help="Pulls from the specified statusdb url. Defaults "
+                          "to database.statusdb_url specified in the "
+                           "configuration.",
+                    dest="statusdb_url")
+    env.add_argument("-d", "--database",
+                     type=str,
+                     help="Pulls from the specified sqlite statusdb, rather "
+                          "than database.statusdb_url specified in the "
+                          "configuration.",
+                     dest="database_loc")
     args = parser.parse_args()
     bootstrap(args)
+    import statusdb
     import statuses
-    from cfgparser import shared
+    import database
+    from cfgparser import cfg
     main(args)

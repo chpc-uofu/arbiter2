@@ -1,11 +1,14 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+#
 # SPDX-License-Identifier: GPL-2.0-only
+#
 # Corrals users' PIDs into their user-$UID.slice. This is useful when Arbiter2
 # is first deployed, since users' PIDs are not moved to their slices when
 # accounting is turned on. New sessions after turning on accounting, however,
 # will be accounted for.
 #
-# Written by Brian Haymore.
+# Written by Brian Haymore
 # Usage: ./user_corraller.sh USERNMAE
 
 #'die' function to report error condition of exit.
@@ -37,10 +40,11 @@ CGDIR=/sys/fs/cgroup
 
 # Now find all PIDs for user $1 and move them into 'cpuacct,cpu' and 'memory' cgroups for user's UID.
 for pid in `ps axo user:32,pid |grep ^$1 |awk '{print $2}'`; do
-  echo "Moving pid:$pid into 'cpu,cpuacct', 'memory' and 'systemd' cgroups for user $1:$ID"
-  echo $pid >$CGDIR/cpu,cpuacct/user.slice/user-${ID}.slice/cgroup.procs
+  echo "Moving pid:$pid into 'cpu', 'cpuacct', 'memory' and 'systemd' cgroups for user $1:$ID"
+  echo $pid >$CGDIR/cpu/user.slice/user-${ID}.slice/cgroup.procs
+  echo $pid >$CGDIR/cpuacct/user.slice/user-${ID}.slice/cgroup.procs
   echo $pid >$CGDIR/memory/user.slice/user-${ID}.slice/cgroup.procs
   echo $pid >$CGDIR/systemd/user.slice/user-${ID}.slice/cgroup.procs
-  grep -e "memory" -e "cpuacct" -e "systemd" /proc/$pid/cgroup
+  grep -e "memory" -e "cpu" -e "systemd" /proc/$pid/cgroup
   echo
 done

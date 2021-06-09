@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2019-2020 Center for High Performance Computing <helpdesk@chpc.utah.edu>
+# SPDX-FileCopyrightText: Copyright (c) 2020 Idaho National Laboratory
+#
 # SPDX-License-Identifier: GPL-2.0-only
 
 """
@@ -20,102 +23,23 @@ D: B
 In D, you can explicitly call C via C.method(self, ...).
 """
 
+import glob
 import logging
+import os
 import re
 import time
-import pathlib
-import pwd
-import os
-import glob
+
+import sysinfo
 import usage
 
 logger = logging.getLogger("arbiter." + __name__)
 
+# The base path for the cgroup hierarchy. I _think_ systemd has standardized
+# this, but not 100% sure.
+base_path = "/sys/fs/cgroup"
+
 # The controller used to check whether a cgroup exists and to get pids from.
-default_controller = "cpu,cpuacct"
-
-def threads_per_core():
-    """
-    Returns the number of threads per core. Includes hyperthreading as a
-    separate thread from the CPU core.
-    """
-    get_values = [r"siblings.+:\s(\d+)", r"cpu\scores.+:\s(\d+)"]
-    cpu_values = []
-    for line in open("/proc/cpuinfo"):
-        if len(cpu_values) >= len(get_values):
-            break
-        for match in re.finditer(get_values[len(cpu_values)], str(line)):
-            cpu_values.append(int(match.group(1)))
-    return int(cpu_values[0] / cpu_values[1])
-
-
-def proc_meminfo(mproperty=None):
-    """
-    Returns a string containing /proc/meminfo. If mproperty is not None,
-    /proc/meminfo returns the int value after the mproperty in /proc/meminfo
-    (Typically in kB). Raises ValueError if /proc/meminfo doesn't contain the
-    property.
-
-    >>> proc_meminfo("MemTotal")
-    8043084
-    """
-    with open("/proc/meminfo") as mem_file:
-        memfile = mem_file.read()
-    if not mproperty:
-        return memfile
-    matched = re.search(r"{}:\s+(\d+)".format(mproperty), memfile)
-    if matched:
-        return int(matched.groups()[0])
-    else:
-        raise ValueError("/proc/meminfo does not contain {}".format(
-            mproperty))
-
-
-# Total Memory in bytes
-total_mem = proc_meminfo("MemTotal") * 1024
-
-# Total Swap size in bytes
-total_swap = proc_meminfo("SwapTotal") * 1024
-
-# Threads per core (Includes hyperthreading as a thread per core)
-threads_per_core = threads_per_core()
-
-
-def bytes_to_gb(memory_bytes):
-    """
-    Returns the memory in GB from bytes.
-
-    memory_bytes: float, int
-        The memory to convert in bytes.
-    """
-    return memory_bytes / 1024**3
-
-
-def bytes_to_pct(memory_bytes):
-    """
-    Returns the memory in bytes to a percent of the machine.
-
-    memory_bytes: float, int
-        The memory to convert in bytes.
-    """
-    return memory_bytes / total_mem * 100
-
-
-def pct_to_gb(memory_pct):
-    """
-    Given a percent of the machine, return how much memory in GB that is.
-
-    memory_pct: float, int
-        The memory (as a percentage of the machine e.g. 50) to convert.
-    """
-    return memory_pct / 100 * bytes_to_gb(total_mem)
-
-
-def free_swap():
-    """
-    Returns the free swap size in bytes.
-    """
-    return proc_meminfo("SwapFree") * 1024
+default_controller = "systemd"
 
 
 class SystemdCGroup():
@@ -144,16 +68,28 @@ class SystemdCGroup():
         """
         self.name = name
         self.parent = parent
-        self.base_path = pathlib.Path("/sys/fs/cgroup/")
 
-    def controller_exists(self, controller, isdir=True):
+    def controller_exists(self, controller):
         """
         Returns whether a specific cgroup controller exists.
         """
-        path = self.base_path / controller / self.parent / self.name
-        return path.exists() and path.is_dir() if isdir else True
+        path = self.controller_path(controller=controller, cgfile="")
+        return os.path.exists(path) and os.path.isdir(path)
 
     def controller_path(self, controller=default_controller, cgfile=""):
+        """
+        Returns the path to a cgroup property or file without checking that
+        the path exists.
+
+        >>> SystemdCGroup("user-0.slice", "user.slice").controller_path()
+        "/sys/fs/cgroup/systemd/user.slice/user-0.slice"
+        >>> SystemdCGroup("user-562.slice", "user.slice").controller_path("cpuacct")
+        "/sys/fs/cgroup/cpuacct/user.slice/user-562.slice"
+        """
+        path_parts = (base_path, controller, self.parent, self.name, cgfile)
+        return "/".join(filter(lambda p: p != "", path_parts))
+
+    def assert_controller_path(self, controller=default_controller, cgfile=""):
         """
         Returns the path to a cgroup property or file. If a property is not
         given, the fully qualified systemd controller path is returned. If the
@@ -164,22 +100,20 @@ class SystemdCGroup():
         cgfile: str
             The cgroup file below the property in the path.
 
-        >>> SystemdCGroup("user-0.slice", "user.slice").controller_path()
-        "/sys/fs/cgroup/systemd/user.slice/user-0.slice"
-        >>> SystemdCGroup("user-562.slice", "user.slice").controller_path("cpuacct")
-        "/sys/fs/cgroup/cpuacct/user.slice/user-562.slice"
-        >>> SystemdCGroup("nota.slice", "system.slice").controller_path("memory")
+        >>> notaslice = SystemdCGroup("nota.slice", "system.slice")
+        >>> notaslice.assert_controller_path("memory")
         FileNotFoundError("Cgroup property...")
-        >>> SystemdCGroup("user-0.slice", "user.slice").controller_path("cpuacct", "cpu.stat")
+        >>> rootslice = SystemdCGroup("user-0.slice", "user.slice")
+        >>> rootslice.assert_controller_path("cpuacct", "cpu.stat")
         "/sys/fs/cgroup/cpu/user.slice/user-0.slice/cpu.stat"
         """
-        path = self.base_path / controller / self.parent / self.name / cgfile
-        if not path.exists():
+        path = self.controller_path(controller=controller, cgfile=cgfile)
+        if not os.path.exists(path):
             raise FileNotFoundError("cgroup property path doesn't exist. "
                                     "This might be due to cgroup accounting "
                                     "not on, the cgroup not existing, or an "
-                                    "invalid property. Path: " + str(path))
-        return str(path)
+                                    "invalid property. Path: " + path)
+        return path
 
     def active(self):
         """
@@ -189,7 +123,7 @@ class SystemdCGroup():
         False
         """
         try:
-            self.controller_path()
+            self.assert_controller_path()
             return True
         except (FileNotFoundError, PermissionError):
             return False
@@ -203,41 +137,83 @@ class SystemdCGroup():
         [549135244092, 1150535824026, 412981314604, 1081336776345]
         """
         prop = "cpuacct.usage_percpu"
-        with open(self.controller_path("cpuacct", prop)) as cpuacct:
+        with open(self.assert_controller_path("cpuacct", prop)) as cpuacct:
             return list(map(int, cpuacct.readline().split()))
 
-    def mem_usage(self, memsw=True, kmem=False):
+    def mem_usage(self, memsw=True, kmem=False, page_cache=False):
         """
         Gets the memory utilization as a proportion of the system's total
         memory or in bytes. If memsw is True, the swap usage is added into the
-        reported memory usage.
+        reported memory usage. If kmem is True, then kernel memory usage is
+        also added. Similarly, if page_cache is True, then page cached memory
+        is added as well.
+
+        Note: With memory.stat shared memory is not proportionally divided
+              between cgroups, meaning if a bunch of processes share a file
+              mapping, then this will be counted against the owner of that
+              mapping, instead of proportionally for every user who is using
+              it. This is what the PSS (proportional shared size) value in
+              /proc/<pid>/smaps is and it's optionally used by
+              pidinfo.Process(). There's no nice way to find this out
+              (expensive for the kernel), but this shouldn't be too big a
+              problem since most shared memory is probably not shared between
+              different users (except for glibc and common libraries, which
+              hopefully shouldn't be big enough to cause problems).
+
+        See kernel.org/doc/html/latest/admin-guide/cgroup-v1/memory.html for
+        more details on this code.
 
         memsw: bool
-            Whether or not to use memsw for calculating memory usage.
+            Whether to include swap.
         kmem: bool
             Whether to include kernel memory.
+        page_cache: bool
+            Whether to include page cache memory.
 
         >>> self.mem_usage()
         40
         """
-        filename = "memory{}.usage_in_bytes"
-        usage_in_bytes = filename.format(".memsw" if memsw else "")
-        mem_usage = 0
-        with open(self.controller_path("memory", usage_in_bytes)) as memfile:
-            mem_usage = int(memfile.read().strip())
+        usage_bytes = 0
+        # memory.usage_in_bytes includes page_cache info, also is a quick fuzz
+        # value to avoid multi-core/numa cacheline false sharing, so
+        # unfortauntely cannot use (historically this was incorrectly used)
+        memory_stat_file = "memory.stat"
+        kmem_usage_file = "memory.kmem.usage_in_bytes"
 
-        if not kmem:
-            kmem_usage_in_bytes = filename.format(".kmem")
-            with open(self.controller_path("memory", kmem_usage_in_bytes)) as memfile:
-                mem_usage -= int(memfile.read().strip())
-        return mem_usage
+        mem_params = [
+            # Anon and swap cache memory (cannot subtract out if memsw=False)
+            # See "Swap Cache" part of
+            # https://www.kernel.org/doc/gorman/html/understand/understand014.html
+            # and https://www.halolinux.us/kernel-architecture/the-swap-cache.html
+            # for details, note this is not the same as "swap". Also, if swap
+            # is turned off this I think is zero -Dylan
+            "total_rss",
+            # Plus need file backed memory
+            "total_mapped_file",
+        ]
+        if memsw:
+            mem_params.append("total_swap")
+        if page_cache:
+            mem_params.append("total_cache")
+        if kmem:
+            with open(self.assert_controller_path("memory", kmem_usage_file)) as memfile:
+                usage_bytes += int(memfile.read().strip())
+
+        mem_re = r"({}) (\d+)".format("|".join(mem_params))
+        mem_pattern = re.compile(mem_re)
+        with open(self.assert_controller_path("memory", memory_stat_file)) as memfile:
+            usage_bytes += sum(
+                int(match.group(2)) if match else 0
+                for match in mem_pattern.finditer(memfile.read())
+            )
+        return usage_bytes
 
     def pids(self):
         """
         Returns a list of current pids in the cgroup.
         """
         pids = []
-        with open(self.controller_path(cgfile="cgroup.procs")) as procfile:
+        with open(self.assert_controller_path(cgfile="cgroup.procs")) as procfile:
             for pid in procfile.readlines():
                 pids.append(pid.strip())
         return pids
@@ -247,9 +223,10 @@ class SystemdCGroup():
         Returns the current cgroup's CPU quota as a percentage. A -1 indicates
         that the quota has not been set.
         """
-        with open(self.controller_path("cpuacct", "cpu.cfs_quota_us")) as quota:
-            with open(self.controller_path("cpuacct",
-                                          "cpu.cfs_period_us")) as period:
+        quota_path = self.assert_controller_path("cpuacct", "cpu.cfs_quota_us")
+        period_path = self.assert_controller_path("cpuacct", "cpu.cfs_period_us")
+        with open(quota_path) as quota:
+            with open(period_path) as period:
                 return (float(quota.readline().strip()) /
                         float(period.readline().strip())) * 100
 
@@ -262,7 +239,7 @@ class SystemdCGroup():
             Whether or not to use memsw for getting the memory quota.
         """
         filename = "memory{}.limit_in_bytes".format(".memsw" if memsw else "")
-        with open(self.controller_path("memory", filename)) as quota:
+        with open(self.assert_controller_path("memory", filename)) as quota:
             return int(quota.readline().strip())
 
     def _set_quota(self, quota, controller, cgfile):
@@ -276,7 +253,7 @@ class SystemdCGroup():
         cgfile: str
             The path to the file relative to the property. e.g. cpu.shares.
         """
-        with open(self.controller_path(controller, cgfile), "w+") as prop:
+        with open(self.assert_controller_path(controller, cgfile), "w+") as prop:
             prop.write(str(quota))
 
     def set_mem_quota(self, quota, memsw=False):
@@ -288,7 +265,7 @@ class SystemdCGroup():
         memsw: bool
             Whether or not to write out to memory.memsw.limit_in_bytes.
         """
-        raw_quota = int(total_mem * (quota / 100))
+        raw_quota = int(sysinfo.total_mem * (quota / 100))
         files = ["memory.limit_in_bytes"]
         if memsw:
             memsw = "memory.memsw.limit_in_bytes"
@@ -309,7 +286,7 @@ class SystemdCGroup():
         quota: float
             The cpu quota (e.g. 100 for 100% of a single core).
         """
-        period_path = self.controller_path("cpuacct", "cpu.cfs_period_us")
+        period_path = self.assert_controller_path("cpuacct", "cpu.cfs_period_us")
         with open(period_path, "r") as cpu_shares_file:
             shares = int(cpu_shares_file.readline())
         self._set_quota(int(quota / 100 * shares), "cpuacct", "cpu.cfs_quota_us")
@@ -331,7 +308,7 @@ class StaticSystemdCGroup(usage.Usage, SystemdCGroup):
     def __repr__(self):
         return "<{}: {}>".format(
             type(self).__name__,
-            str(self.base_path / self.parent / self.name)
+            "/".join([base_path, self.parent, self.name])
         )
 
     def __add__(self, other):
@@ -343,7 +320,6 @@ class StaticSystemdCGroup(usage.Usage, SystemdCGroup):
             new = super().__add__(other)
             new.name = self.name
             new.parent = self.parent
-            new.base_path = self.base_path
             new._pids = list(set(self._pids + other._pids))
             return new
         return super().__add__(other)
@@ -357,7 +333,6 @@ class StaticSystemdCGroup(usage.Usage, SystemdCGroup):
             new = super().__sub__(other)
             new.name = self.name
             new.parent = self.parent
-            new.base_path = self.base_path
             new._pids = list(set(self._pids + other._pids))
             return new
         return super().__sub__(other)
@@ -380,7 +355,8 @@ class SystemdCGroupInstance(SystemdCGroup):
         Initializes the instaneous usage information of a systemd cgroup
         """
         SystemdCGroup.__init__(self, name, parent)
-        self.time = time.time()
+        # Yeah let's not muck around with leap seconds and the like...
+        self.monotonic_time = time.monotonic()
         # Raise errors if these fail since it likely means user disappeared
         self.cputime = sum(self.cpu_usage_per_core())
         self.memory_bytes = self.mem_usage(memsw=memsw)
@@ -414,14 +390,13 @@ class SystemdCGroupInstance(SystemdCGroup):
         return {
             "cpu": (
                 max(other.cputime - self.cputime, 0) /
-                abs(other.time - self.time) / 1E7
+                (other.monotonic_time - self.monotonic_time) / 1e9 * 100
             ),
             "mem": (
                 (other.memory_bytes + self.memory_bytes) / 2
-                / total_mem * 100
+                / sysinfo.total_mem * 100
             )
         }
-
 
     def __truediv__(self, other):
         """
@@ -507,7 +482,7 @@ class UserSlice(SystemdCGroup):
         """
         pids = super().pids()  # top level pids
         # if session@scope is turned on
-        path = "{}/*.scope/cgroup.procs".format(self.controller_path())
+        path = "{}/*.scope/cgroup.procs".format(self.assert_controller_path())
         for session in glob.iglob(path):
             with open(session) as proc_file:
                 for pid in proc_file.readlines():
@@ -585,7 +560,7 @@ class UserSliceInstance(SystemdCGroupInstance, UserSlice):
         return super().__truediv__(other)
 
 
-def wait_till_uids(min_uid=0):
+def wait_till_uids(min_uid=0, blacklist=tuple()):
     """
     Blocks until users are on the machine and returns a list of uids that are
     active.
@@ -593,7 +568,8 @@ def wait_till_uids(min_uid=0):
     uids = []
     while not uids:
         time.sleep(0.5)
-        uids = current_cgroup_uids(min_uid=min_uid)
+        all_uids_above_min = current_cgroup_uids(min_uid=min_uid)
+        uids = list(filter(lambda u: u not in blacklist, all_uids_above_min))
     return uids
 
 
@@ -634,29 +610,8 @@ def current_cgroups(parent="user.slice", controller=default_controller):
     >>> current_cgroups("user.slice/user-1010.slice")
     []
     """
-    glob_str= "/sys/fs/cgroup/{}/{}/**/*.slice".format(controller, parent)
+    glob_str = "/sys/fs/cgroup/{}/{}/**/*.slice".format(controller, parent)
     return [os.path.basename(p) for p in glob.iglob(glob_str, recursive=True)]
-
-
-def total_clockticks():
-    """
-    Returns the total cpu clock ticks of the system in jiffies.
-    """
-    with open("/proc/stat") as stat:
-        stat_values = list(map(int, stat.readline()[5:].split(" ")))
-        # Sum up the user kernel and guest time
-        return sum(stat_values)
-
-
-def passwd_entry(uid):
-    """
-    Returns whether the user can be looked up via passwd.
-    """
-    try:
-        pwd.getpwuid(uid)
-        return True
-    except KeyError:
-        return False
 
 
 def safe_check_on_any_uid(func, min_uid=0, retry_interval=0.1):
