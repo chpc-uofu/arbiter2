@@ -458,7 +458,8 @@ def user_nice_email(uid, new_status_group):
     send_nice_email(metadata, new_status_group)
 
 
-def user_warning_email(user_obj, new_status_group, syncing_hosts):
+def user_warning_email(user_obj, new_status_group, badness_timestamp,
+                       syncing_hosts):
     """
     Warns the user about their policy violations in a email.
 
@@ -466,6 +467,8 @@ def user_warning_email(user_obj, new_status_group, syncing_hosts):
         The user to send the email to.
     new_status_group: str
         The new status group to that has been applied to the user.
+    badness_timestamp: int
+        A epoch timestamp of when the user starting being bad.
     syncing_hosts: [str, ]
         A list of hosts that statusdb is syncing with.
     """
@@ -508,7 +511,7 @@ def user_warning_email(user_obj, new_status_group, syncing_hosts):
         metadata,
         new_status_group,
         email_table,
-        user_obj.badness_obj.start_of_badness(),
+        badness_timestamp,
         severity_expression,
         plot_filepath,
         syncing_hosts

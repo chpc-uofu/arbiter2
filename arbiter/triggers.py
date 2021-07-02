@@ -86,6 +86,7 @@ def upgrade_penalty(user_obj, username, statusdb_obj, logdb_obj):
                      user_obj.uid_name, sysinfo.hostname)
 
     new_status_group = user_obj.status.upgrade_penalty()
+    badness_timestamp = user_obj.badness_obj.start_of_badness()
     user_obj.badness_obj.reset()  # Penalized users are not evaluated; set to 0.0
 
     # Want to ensure badness drops to 0.0 in statusdb after violation,
@@ -107,7 +108,8 @@ def upgrade_penalty(user_obj, username, statusdb_obj, logdb_obj):
     logdb_obj.add_action(new_status_group, user_obj.uid,
                          user_obj.history_iter(), int(time.time()))
 
-    actions.user_warning_email(user_obj, new_status_group, syncing_hosts)
+    actions.user_warning_email(user_obj, new_status_group, badness_timestamp,
+                               syncing_hosts)
     service_logger.info("User %s was put in: %s", username, new_status_group)
 
 
