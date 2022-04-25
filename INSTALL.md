@@ -3,7 +3,7 @@
 Arbiter2 is designed for CentOS 7 and 8 systems at the University of Utah Center for High Performance Computing (CHPC). It can run in other environments, provided the operating system uses a version of systemd with cgroups v1 (or a "hybrid" hierarchy, which will work with some functionality restrictions). In general, the software can be installed by
 
 1. Downloading the Arbiter2 source files
-3. Installing Python 3.6+ and the `matplotlib`, `toml` and `requests` modules
+3. Installing Python 3.6+ and the modules in `requirements.txt`
 2. Creating or configuring a user to run the service, such as root or a user with limited superuser privileges
 4. Updating the configuration file (`etc/config.toml`) and the integration code (`etc/integrations.py`)
 5. Updating and installing the service file
