@@ -39,6 +39,8 @@ logger = logging.getLogger("arbiter." + __name__)
 base_path = "/sys/fs/cgroup"
 
 # The controller used to check whether a cgroup exists and to get pids from.
+# This is basically an empty cgroup that systemd uses as a reference for how
+# other v1 controller cgroup hierachies should look
 default_controller = "systemd"
 
 
@@ -89,32 +91,6 @@ class SystemdCGroup():
         path_parts = (base_path, controller, self.parent, self.name, cgfile)
         return "/".join(filter(lambda p: p != "", path_parts))
 
-    def assert_controller_path(self, controller=default_controller, cgfile=""):
-        """
-        Returns the path to a cgroup property or file. If a property is not
-        given, the fully qualified systemd controller path is returned. If the
-        path does not exist, a FileNotFoundError is raised.
-
-        controller: str
-            A cgroup controller. e.g. cpuacct, memory, blkio
-        cgfile: str
-            The cgroup file below the property in the path.
-
-        >>> notaslice = SystemdCGroup("nota.slice", "system.slice")
-        >>> notaslice.assert_controller_path("memory")
-        FileNotFoundError("Cgroup property...")
-        >>> rootslice = SystemdCGroup("user-0.slice", "user.slice")
-        >>> rootslice.assert_controller_path("cpuacct", "cpu.stat")
-        "/sys/fs/cgroup/cpu/user.slice/user-0.slice/cpu.stat"
-        """
-        path = self.controller_path(controller=controller, cgfile=cgfile)
-        if not os.path.exists(path):
-            raise FileNotFoundError("cgroup property path doesn't exist. "
-                                    "This might be due to cgroup accounting "
-                                    "not on, the cgroup not existing, or an "
-                                    "invalid property. Path: " + path)
-        return path
-
     def active(self):
         """
         Returns whether the current cgroup exists in the cgroup hierarchy.
@@ -122,11 +98,8 @@ class SystemdCGroup():
         >>> SystemdCGroup("notacgroup.slice", "user.slice").active()
         False
         """
-        try:
-            self.assert_controller_path()
-            return True
-        except (FileNotFoundError, PermissionError):
-            return False
+        path = self.controller_path()
+        return os.path.exists(path)
 
     def cpu_usage_per_core(self):
         """
@@ -137,16 +110,15 @@ class SystemdCGroup():
         [549135244092, 1150535824026, 412981314604, 1081336776345]
         """
         prop = "cpuacct.usage_percpu"
-        with open(self.assert_controller_path("cpuacct", prop)) as cpuacct:
+        with open(self.controller_path("cpuacct", prop)) as cpuacct:
             return list(map(int, cpuacct.readline().split()))
 
     def mem_usage(self, memsw=True, kmem=False, page_cache=False):
         """
-        Gets the memory utilization as a proportion of the system's total
-        memory or in bytes. If memsw is True, the swap usage is added into the
-        reported memory usage. If kmem is True, then kernel memory usage is
-        also added. Similarly, if page_cache is True, then page cached memory
-        is added as well.
+        Gets the memory utilization in bytes. If memsw is True, the swap usage
+        is added into the reported memory usage. If kmem is True, then kernel
+        memory usage is also added. Similarly, if page_cache is True, then
+        page cached memory is added as well.
 
         Note: With memory.stat shared memory is not proportionally divided
               between cgroups, meaning if a bunch of processes share a file
@@ -170,8 +142,8 @@ class SystemdCGroup():
         page_cache: bool
             Whether to include page cache memory.
 
-        >>> self.mem_usage()
-        40
+        >>> SystemdCGroup("user-1000.slice", "user.slice").mem_usage()
+        4194304
         """
         usage_bytes = 0
         # memory.usage_in_bytes includes page_cache info, also is a quick fuzz
@@ -196,12 +168,12 @@ class SystemdCGroup():
         if page_cache:
             mem_params.append("total_cache")
         if kmem:
-            with open(self.assert_controller_path("memory", kmem_usage_file)) as memfile:
+            with open(self.controller_path("memory", kmem_usage_file)) as memfile:
                 usage_bytes += int(memfile.read().strip())
 
         mem_re = r"({}) (\d+)".format("|".join(mem_params))
         mem_pattern = re.compile(mem_re)
-        with open(self.assert_controller_path("memory", memory_stat_file)) as memfile:
+        with open(self.controller_path("memory", memory_stat_file)) as memfile:
             usage_bytes += sum(
                 int(match.group(2)) if match else 0
                 for match in mem_pattern.finditer(memfile.read())
@@ -211,22 +183,42 @@ class SystemdCGroup():
     def pids(self):
         """
         Returns a list of current pids in the cgroup.
+
+        Note: the order in which pids are returned is not guaranteed to be
+              numerically sorted.
         """
+        # FIXME: Replace this with a set(); I believe the consumers of this
+        #        turn it into a set anyways and the order is not garuanteed
+        #        or significant
         pids = []
-        with open(self.assert_controller_path(cgfile="cgroup.procs")) as procfile:
+        with open(self.controller_path(cgfile="cgroup.procs")) as procfile:
             for pid in procfile.readlines():
                 pids.append(pid.strip())
         return pids
 
     def cpu_quota(self):
         """
-        Returns the current cgroup's CPU quota as a percentage. A -1 indicates
-        that the quota has not been set.
+        Returns the current cgroup's CPU quota as a percentage. A negative
+        floating point number indicates that the quota has not been set.
         """
-        quota_path = self.assert_controller_path("cpuacct", "cpu.cfs_quota_us")
-        period_path = self.assert_controller_path("cpuacct", "cpu.cfs_period_us")
+        # FIXME: Do something better than return a mysterious negative
+        #        fractional number
+
+        # Our notion of limiting a cgroup to something like "50% of a core"
+        # boils down to limiting 50% of the available CPU time of a single
+        # core for fixed period, every possible period. The kernel presents
+        # two knobs for us to achieve this: the period (in Hz, usually 1000
+        # but not garuanteed; no need to touch this), and the quota (which is
+        # a fraction of the period)
+        #
+        # Getting the percentange is then: quota / period * 100, ez peasy
+        quota_path = self.controller_path("cpuacct", "cpu.cfs_quota_us")
+        period_path = self.controller_path("cpuacct", "cpu.cfs_period_us")
         with open(quota_path) as quota:
             with open(period_path) as period:
+                # the quota reported will be -1 if we have not quota; for most
+                # machine with a 1000 Hz, this results in:
+                # -1 / 1000 * 100 = -0.1
                 return (float(quota.readline().strip()) /
                         float(period.readline().strip())) * 100
 
@@ -235,11 +227,24 @@ class SystemdCGroup():
         Returns the current cgroup's memory quota in bytes. A -1 indicates that
         the quota has not been set.
 
+        Note: "memory quota" is quite ambigious and I'm not 100% of what this
+              quite means in the kernel (it's technically documented at [1],
+              though in my defence the doc seems to be written only for kernel
+              developers). I'm guessing the quota set here enforces the amount
+              of memory allocated to the process in the physical page-tables,
+              including shared memory but I'm not quite sure how shared memory
+              across cgroup boundaries is counted... I have a higher confidence
+              saying that the page cache is counted towards the limit since
+              usage_in_bytes is quietly tainted with it. -Dylan
+
+              See also: self.mem_usage().
+              [1] https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v1/memory.html
+
         memsw: bool
             Whether or not to use memsw for getting the memory quota.
         """
         filename = "memory{}.limit_in_bytes".format(".memsw" if memsw else "")
-        with open(self.assert_controller_path("memory", filename)) as quota:
+        with open(self.controller_path("memory", filename)) as quota:
             return int(quota.readline().strip())
 
     def _set_quota(self, quota, controller, cgfile):
@@ -253,24 +258,28 @@ class SystemdCGroup():
         cgfile: str
             The path to the file relative to the property. e.g. cpu.shares.
         """
-        with open(self.assert_controller_path(controller, cgfile), "w+") as prop:
+        with open(self.controller_path(controller, cgfile), "w+") as prop:
             prop.write(str(quota))
 
     def set_mem_quota(self, quota, memsw=False):
         """
         Sets the memory quota of the user as a percentage of the machine.
 
+        See self.mem_quota() for more details on the this.
+
         quota: float
             The memory quota (e.g. 50 for 50% of the total memory).
         memsw: bool
             Whether or not to write out to memory.memsw.limit_in_bytes.
         """
+        # TODO: Figure out whether we even need to write out to limit_in_bytes
+        #       if memsw.limit_in_bytes is already written?
         raw_quota = int(sysinfo.total_mem * (quota / 100))
         files = ["memory.limit_in_bytes"]
         if memsw:
             memsw = "memory.memsw.limit_in_bytes"
             # memory.limit_in_bytes must be written before memsw, depending on
-            # if higher
+            # if higher. Don't ask my why... it's somewhat undocumented. -Dylan
             if raw_quota >= self.mem_quota(memsw=True):
                 files.insert(0, memsw)
             else:
@@ -283,10 +292,12 @@ class SystemdCGroup():
         Sets the cpu quota of the user as a percentage of a core using the
         cpu period to get the quota relative to the shares.
 
+        See cpu_quota() for details.
+
         quota: float
             The cpu quota (e.g. 100 for 100% of a single core).
         """
-        period_path = self.assert_controller_path("cpuacct", "cpu.cfs_period_us")
+        period_path = self.controller_path("cpuacct", "cpu.cfs_period_us")
         with open(period_path, "r") as cpu_shares_file:
             shares = int(cpu_shares_file.readline())
         self._set_quota(int(quota / 100 * shares), "cpuacct", "cpu.cfs_quota_us")
@@ -482,7 +493,7 @@ class UserSlice(SystemdCGroup):
         """
         pids = super().pids()  # top level pids
         # if session@scope is turned on
-        path = "{}/*.scope/cgroup.procs".format(self.assert_controller_path())
+        path = "{}/*.scope/cgroup.procs".format(self.controller_path())
         for session in glob.iglob(path):
             with open(session) as proc_file:
                 for pid in proc_file.readlines():

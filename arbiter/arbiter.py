@@ -357,5 +357,5 @@ if __name__ == "__main__":
     args = arguments()
     pre_run(args)
     import main
-    startup_logger.info("Arbiter is starting.")
+    startup_logger.info("Arbiter has started.")
     sys.exit(main.run(args))

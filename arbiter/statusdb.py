@@ -39,6 +39,19 @@ status_schema_v2 = [
     "hostname VARCHAR(64) NOT NULL",
     "CONSTRAINT same_user PRIMARY KEY(uid, hostname)"
 ]
+status_schema_v3 = [
+    "uid INTEGER NOT NULL",
+    "current_status TEXT NOT NULL",
+    "default_status TEXT NOT NULL",
+    "occurrences INTEGER NOT NULL",
+    "timestamp INTEGER NOT NULL",
+    "occurrences_timestamp INTEGER NOT NULL",
+    # Linux defines hostnames to be up to 64 bytes (man 2 gethostname)
+    "hostname VARCHAR(64) NOT NULL",
+    "sync_group VARCHAR(64)",
+    "CONSTRAINT same_user PRIMARY KEY(uid, hostname)"
+]
+
 badness_schema = [
     "uid INTEGER NOT NULL UNIQUE",
     "timestamp INTEGER NOT NULL",
@@ -52,6 +65,15 @@ badness_schema_v2 = [
     "cpu_badness REAL NOT NULL",
     "mem_badness REAL NOT NULL",
     "hostname VARCHAR(64) NOT NULL",
+    "CONSTRAINT same_user PRIMARY KEY(uid, hostname)"
+]
+badness_schema_v3 = [
+    "uid INTEGER NOT NULL",
+    "timestamp INTEGER NOT NULL",
+    "cpu_badness REAL NOT NULL",
+    "mem_badness REAL NOT NULL",
+    "hostname VARCHAR(64) NOT NULL",
+    "sync_group VARCHAR(64)",
     "CONSTRAINT same_user PRIMARY KEY(uid, hostname)"
 ]
 # So apparently trying to catch sqlalchemy.exc.DBAPIError and
@@ -97,31 +119,34 @@ class StatusDB(database.Database):
         self.status_tablename = status_tablename
         self.badness_tablename = badness_tablename
         self.cfg_db_consistency = cfg_db_consistency
-        self.is_v2_cache = None
         # Track what is in the database so we can figure out whether old
         # values need to be deleted
         self.stored_badness_uids = set()
         self.stored_status_uids = set()
         # Track which hosts we last synced with; used in known_syncing_hosts()
         self.last_known_syncing_hosts = set()
+        self.sync_group = cfg.database.statusdb_sync_group
 
-    def is_v2(self):
+    def status_and_badness_tablenames(self):
         """
-        Returns whether the database schemas are v2 (enables synchronization).
+        Returns both the status and badness tablenames used by this StatusDB
+        instance.
         """
-        if self.is_v2_cache is None:
-            # Safe to assume both status and badness tables are either v2 or not,
-            # enforced in create_status_database_if_needed()
-            self.is_v2_cache = self.is_v2_status_table()
-
-        return self.is_v2_cache
+        return self.status_tablename, self.badness_tablename
 
     def is_v2_badness_table(self):
         """
-        Returns the name there is a v2 status table in the given database. May
+        Returns if there is a v2 status table in the given database. May
         raise an error if the table or database doesn't exist.
         """
         return self.column_in_table(self.badness_tablename, "hostname")
+
+    def is_v3_badness_table(self):
+        """
+        Returns if there is a v3 status table in the given database. May
+        raise an error if the table or database doesn't exist.
+        """
+        return self.column_in_table(self.badness_tablename, "sync_group")
 
     def is_v2_status_table(self):
         """
@@ -129,6 +154,13 @@ class StatusDB(database.Database):
         raise an error if the table or database doesn't exist.
         """
         return self.column_in_table(self.status_tablename, "hostname")
+
+    def is_v3_status_table(self):
+        """
+        Returns the name there is a v2 status table in the given database. May
+        raise an error if the table or database doesn't exist.
+        """
+        return self.column_in_table(self.status_tablename, "sync_group")
 
     def read_status(self):
         """
@@ -161,17 +193,17 @@ class StatusDB(database.Database):
         """
         known_syncing_hosts = set()
 
-        v2 = self.is_v2()
         table = self.read_table(self.status_tablename)
         status_dict = collections.defaultdict(dict)
         for row in table:  # table -> {col: value, ...}; ordered
+            if row["sync_group"] != self.sync_group:
+                continue
             uid = int(row.pop("uid"))
-            hostname = sysinfo.hostname
-            if v2:
-                hostname = row.pop("hostname")
-                known_syncing_hosts.add(hostname)
+            hostname = row.pop("hostname")
+            known_syncing_hosts.add(hostname)
 
-            status = statuses.Status(*row.values(), authority=hostname)
+            # current, default, occurrences, timestamp, occur_timestamp
+            status = statuses.Status(row["current_status"], row["default_status"], row["occurrences"], row["timestamp"], row["occurrences_timestamp"], authority=hostname)
             if self.cfg_db_consistency:
                 status.enforce_cfg_db_consistency(uid)
 
@@ -190,38 +222,52 @@ class StatusDB(database.Database):
         status_dict: dict
             A dictionary of users with their status to update the database with.
         """
-        v2 = self.is_v2()
-        status_columns = ("uid, current_status, default_status, occurrences, "
-                          "timestamp, occurrences_timestamp")
-        status_columns += ", hostname" if v2 else ""
-
-        # SQL Injection Avoidance: we can trust our own values
-        inserts = []
-        insert = "REPLACE INTO {} ({}) VALUES({}, '{}', '{}', {}, {}, {}{});"
+        new_status_dict = dict()
         for uid, status in status_dict.items():
-            if not self._needs_status_updated(status):
+            if not self._should_be_in_database(status):
                 # There may be an existing status in the database, want to
                 # make sure that is deleted upon no longer needing status
                 # updated (e.g. when authority us -> other). However,
-                # given not _needs_status_updated is quite commonly true,
+                # given not _should_be_in_database is quite commonly true,
                 # check for whether we know it to be in the database first
                 # before deleting
                 if uid in self.stored_status_uids:
                     self._remove_status(uid)
                 continue
 
-            self.stored_status_uids.add(uid)
-            inserts.append(insert.format(
-                self.status_tablename,
-                status_columns,
-                uid,
-                status.current,
-                status.default,
-                status.occurrences,
-                status.timestamp,
-                status.occur_timestamp,
-                ", '{}'".format(sysinfo.hostname) if v2 else ""
-            ))
+            new_status_dict[uid] = {sysinfo.hostname: status}
+
+        self.write_raw_status(new_status_dict)
+
+    def write_raw_status(self, status_dict):
+        """
+        Writes a dictionary of users with their corresponding status.
+
+        status_dict: dict
+            A dictionary of users with their status to update the database with.
+        """
+        status_columns = ("uid, current_status, default_status, occurrences, "
+                          "timestamp, occurrences_timestamp, hostname, "
+                          "sync_group")
+
+        # SQL Injection Avoidance: we can trust our own values
+        inserts = []
+        insert = "REPLACE INTO {} ({}) VALUES({}, '{}', '{}', {}, {}, {}, '{}', '{}');"
+        for uid, host_status in status_dict.items():
+            for hostname, status in host_status.items():
+                inserts.append(insert.format(
+                    self.status_tablename,
+                    status_columns,
+                    uid,
+                    status.current,
+                    status.default,
+                    status.occurrences,
+                    status.timestamp,
+                    status.occur_timestamp,
+                    hostname,
+                    self.sync_group
+                ))
+
         self.execute_commands(inserts, [{}] * len(inserts))
 
     def get_status(self, uid):
@@ -237,17 +283,16 @@ class StatusDB(database.Database):
                         timestamp=1534261840, occur_timestamp=1534261840)
         """
         # SQL Injection Avoidance: we can trust our own values
-        v2 = self.is_v2()
         uid = int(uid)
         status = statuses.lookup_empty_status(uid)
-        constraints = {"uid": str(uid)}
+        constraints = {"uid": str(uid), "sync_group": self.sync_group}
         table = self.read_table(self.status_tablename, **constraints)
         if not table:
             return status
 
         status_host_dict = {}
         for entry in table:
-            hostname = entry["hostname"] if v2 else sysinfo.hostname
+            hostname = entry["hostname"]
             status_host_dict[hostname] = statuses.Status(
                 entry["current_status"],
                 entry["default_status"],
@@ -275,7 +320,7 @@ class StatusDB(database.Database):
         """
         self.write_status({uid: new_status})
 
-    def _needs_status_updated(self, status):
+    def _should_be_in_database(self, status):
         """
         Returns whether the status should not be in statusdb.
 
@@ -284,8 +329,18 @@ class StatusDB(database.Database):
         status: statuses.Status()
             The status of the user.
         """
-        # Our status is reflective of another host's and we keep only
-        # authoritative statuses in the database to simplify syncing
+        # We have an invariant that no non-authoritative (penalty statuses
+        # that we adopt from another host when syncing) statuses should be
+        # kept in the database. This is so if this host fails, then it will
+        # not presume that it's database entries are authoritative (i.e.
+        # belong to this host). This could be tracked with a authoritative
+        # column, but it's simplier to just not have non-authoritative entries
+        # in the database
+        #
+        # (recall, if a host is authoritative, it will send emails to the user;
+        #  if there are multiple authoritative hosts (where the user is in
+        #  penalty), then the user will get multiple emails, which we don't
+        #  want.)
         return status.authoritative()
 
     def _remove_status(self, uid):
@@ -296,16 +351,13 @@ class StatusDB(database.Database):
             The user's uid.
         """
         uid = int(uid)
-        v2 = self.is_v2()
 
         # SQL Injection Avoidance: we can trust our own values
-        host_constraint = ' AND hostname = "{}"'.format(sysinfo.hostname)
-        remove = (
-            'DELETE FROM {} WHERE uid = {}{};'.format(
-                self.status_tablename,
-                uid,
-                host_constraint if v2 else ""
-            )
+        remove = 'DELETE FROM {} WHERE uid = {} AND hostname = "{}" AND sync_group = "{}";'.format(
+            self.status_tablename,
+            uid,
+            sysinfo.hostname,
+            self.sync_group
         )
         self.execute_command(remove)
         self.stored_status_uids.discard(uid)
@@ -321,7 +373,7 @@ class StatusDB(database.Database):
         user_status_dict = self.read_status()
 
         for uid, status in user_status_dict.items():
-            if not self._needs_status_updated(status):
+            if not self._should_be_in_database(status):
                 self._remove_status(uid)
 
     def read_badness(self):
@@ -332,11 +384,12 @@ class StatusDB(database.Database):
         >>> self.read_badness()
         {1001: ({"cpu": 0.0, "mem": 0.0}, 683078400)}
         """
-        v2 = self.is_v2()
-        host_constraint = {"hostname": sysinfo.hostname} if v2 else {}
+        host_constraint = {"hostname": sysinfo.hostname}
         table = self.read_table(self.badness_tablename, **host_constraint)
         user_badness = {}
         for entry in table:  # table -> {col: value, ...}; ordered
+            if entry["sync_group"] != self.sync_group:
+                continue
             uid = int(entry["uid"])
             user_badness[uid] = badness.Badness(
                 cpu=entry["cpu_badness"],
@@ -360,13 +413,11 @@ class StatusDB(database.Database):
                 ...
             )
         """
-        v2 = self.is_v2()
-        badness_columns = "uid, timestamp, cpu_badness, mem_badness"
-        badness_columns += ", hostname" if v2 else ""
+        badness_columns = "uid, timestamp, cpu_badness, mem_badness, hostname, sync_group"
 
         # SQL Injection Avoidance: we can trust our own values
         inserts = []
-        insert = "REPLACE INTO {}({}) VALUES({}, {}, {}, {}{});"
+        insert = "REPLACE INTO {}({}) VALUES({}, {}, {}, {}, '{}', '{}');"
         for uid, badness_obj in badness_dict.items():
             if not self._needs_badness_updated(badness_obj):
                 # Again, if badness doesn't need updating then we should
@@ -387,7 +438,8 @@ class StatusDB(database.Database):
                 badness_obj.last_updated(),
                 badness_obj.cpu,
                 badness_obj.mem,
-                ", '{}'".format(sysinfo.hostname) if v2 else ""
+                sysinfo.hostname,
+                self.sync_group
             ))
         self.execute_commands(inserts, [{}] * len(inserts))
 
@@ -424,7 +476,7 @@ class StatusDB(database.Database):
         uid: int
             The user's uid associated with the properties.
         """
-        remove = 'DELETE FROM {} WHERE uid = {};'.format(self.badness_tablename, int(uid))
+        remove = 'DELETE FROM {} WHERE uid = {} AND sync_group = "{}";'.format(self.badness_tablename, int(uid), self.sync_group)
         self.execute_command(remove)
         self.stored_badness_uids.discard(uid)
 
@@ -443,78 +495,117 @@ class StatusDB(database.Database):
     def known_syncing_hosts(self):
         """
         Returns a set of hosts that we last successfully synchronized from,
-        including our own host. If synchronization is not enabled (e.g. not
-        using a v2 table), the current host is returned in a set.
+        including our own host.
         """
         last_known_syncing_hosts = self.last_known_syncing_hosts.copy()
         # Ensure our host is in there
         last_known_syncing_hosts.add(sysinfo.hostname)
         return last_known_syncing_hosts
 
-    def create_status_table(self, v2=True):
+    def create_status_table(self):
         """
-        Create a status table with the v2 schema if specified.
+        Creates a status table.
         """
         self.create_database(
-            status_schema_v2 if v2 else status_schema,
+            status_schema_v3,
             self.status_tablename
         )
 
-    def create_badness_table(self, v2=True):
+    def create_badness_table(self):
         """
-        Create a badness table with the v2 schema if specified.
+        Creates a badness table.
         """
         self.create_database(
-            badness_schema_v2 if v2 else badness_schema,
+            badness_schema_v3,
             self.badness_tablename
         )
 
-    def create_status_database_if_needed(self, v2=True):
+    def create_status_database_if_needed(self):
         """
         Creates a tables for storing statusdb information only if non-existent.
-        The v2 flag is only enforced on table creation. Returns whether the
-        whether the tables were created and whether the schema found or
-        created was a v2 schema.
-
-        v2: bool
-            Whether to create a v2 schema.
+        Returns whether the database already existed and whether a migration
+        occurred.
         """
         was_created = False
+        did_migrate_schema = False
         try:
             is_v2_badness_schema = self.is_v2_badness_table()
-            if v2 and not is_v2_badness_schema:
-                logger.warning("Badness schema is not v2 but tried to create a v2 schema.")
-            if not v2 and is_v2_badness_schema:
-                logger.debug("Badness schema is v2 but tried to create a non-v2 schema.")
+            is_v3_badness_schema = self.is_v3_badness_table()
+            if not is_v3_badness_schema:
+                # Added sync_group column in v3; want to migrate so we don't
+                # have to have special logic to deal with old v1 and v2 schemas
+                self.execute_command(f"ALTER TABLE {self.badness_tablename} RENAME TO old_{self.badness_tablename}")
+                did_migrate_schema = True
+                raise database.NoSuchTableError
+
+            # Up-to-date schema exists; cleanup old sync groups.
+            cleanup_old_sync_groups = 'DELETE FROM {} WHERE hostname = "{}" AND sync_group != "{}";'.format(self.badness_tablename, sysinfo.hostname, self.sync_group)
+            self.execute_command(cleanup_old_sync_groups)
         except database.NoSuchTableError:
             logger.debug("Badness table does not exist; creating it")
-            self.create_badness_table(v2)
-            is_v2_badness_schema = v2
+            self.create_badness_table()
             was_created = True
 
         try:
             is_v2_status_schema = self.is_v2_status_table()
-            if v2 and not is_v2_status_schema:
-                logger.warning("Status schema is not v2 but tried to create a v2 schema.")
-            if not v2 and is_v2_status_schema:
-                logger.debug("Status schema is v2 but tried to create a non-v2 schema.")
+            is_v3_status_schema = self.is_v3_status_table()
+            if not is_v3_status_schema:
+                self.execute_command(f"ALTER TABLE {self.status_tablename} RENAME TO old_{self.status_tablename}")
+                did_migrate_schema = True
+                raise database.NoSuchTableError
+
+            # Up-to-date schema exists; cleanup old sync groups.
+            cleanup_old_sync_groups = 'DELETE FROM {} WHERE hostname = "{}" AND sync_group != "{}";'.format(self.status_tablename, sysinfo.hostname, self.sync_group)
+            self.execute_command(cleanup_old_sync_groups)
         except database.NoSuchTableError:
             logger.debug("Status table does not exist; creating it")
-            self.create_status_table(v2)
-            is_v2_status_schema = v2
+            self.create_status_table()
             was_created = True
 
-        if is_v2_badness_schema != is_v2_status_schema:
-            raise database.SQLAlchemyError(
-                "Status and Badness schemas are not consistent! (status_is_v2={}, "
-                "badness_is_v2={})".format(
-                    is_v2_status_schema,
-                    is_v2_badness_schema
-                )
-            )
+        return was_created, did_migrate_schema
 
-        self.is_v2_cache = is_v2_status_schema
-        return was_created, self.is_v2_cache
+    def synchronize_status_from_ourself(self, user_statuses):
+        """
+        Updates this host's user statuses entries based on this host's
+        statuses in the database.
+
+        This is a special case of synchronize_status_from_other_hosts, where
+        we want to adopt any external changes that happen in the database
+        outside of arbiter (e.g. arbupdate.py).
+
+        The normal resolution process in *from_other_hosts is not suited for
+        resolving with ourselves because valid penalties take priority over
+        everything else (e.g. if we are in penalty and externally someone
+        removes us from penalty, we want the non-penalty to take effect).
+
+        user_statuses: dict
+            A dictionary of statuses, where the key is a uid and the value is
+            their status.
+        """
+        raw_host_statuses = self.read_raw_status()
+        modified_user_statuses = {}
+        for uid, curr_status in user_statuses.items():
+            if uid not in raw_host_statuses:
+                continue
+            if sysinfo.hostname not in raw_host_statuses[uid]:
+                continue
+
+            old_status = curr_status.copy()
+            database_status = raw_host_statuses[uid][sysinfo.hostname]
+            was_database_choosen = curr_status.resolve_with_ourself(database_status)
+            if was_database_choosen:
+                logger.debug(
+                    "Database sync: %s's status on %s (%s) is being replaced "
+                    "with their own status in the database (%s)",
+                    uid,
+                    sysinfo.hostname,
+                    str(old_status),
+                    str(curr_status)
+                )
+
+            modified_user_statuses[uid] = curr_status
+
+        self.write_status(modified_user_statuses)
 
     def synchronize_status_from_other_hosts(self, user_statuses):
         """
@@ -565,11 +656,6 @@ class StatusDB(database.Database):
         # To keep track of who needs to send emails, an authority host is
         # kept and reflects the host where a particular penalty originated.
         # We only keep our authoritative statuses in the database.
-
-        if not self.is_v2():
-            # Non-v2 tables (e.g. old local sqlite3 instances) have no syncing
-            # capabilities; the modifications are none
-            return {}
 
         # Note: There is technically a race condition here between reading
         #       other host's values and writing our own based on those
@@ -674,19 +760,20 @@ def lookup_tablenames():
     """
     Returns the configured status and badness tablenames.
     """
-    sync_group = cfg.database.statusdb_sync_group
-    if sync_group != "":
-        tablename_ext = "_" + sync_group
-    else:
-        tablename_ext = ""
+    return ("status", "badness")
+    #sync_group = cfg.database.statusdb_sync_group
+    #if sync_group != "":
+    #    tablename_ext = "_" + sync_group
+    #else:
+    #    tablename_ext = ""
 
-    return (
-        # status_syncgroup if sync group is defined, else status
-        "status" + tablename_ext,
-        # Note that badness scores are currently not synchronized, but we'll
-        # still seperate the tables for cleanness
-        "badness" + tablename_ext
-    )
+    #return (
+    #    # status_syncgroup if sync group is defined, else status
+    #    "status" + tablename_ext,
+    #    # Note that badness scores are currently not synchronized, but we'll
+    #    # still seperate the tables for cleanness
+    #    "badness" + tablename_ext
+    #)
 
 
 def lookup_statusdb(statusdb_url=None, cfg_db_consistency=False):

@@ -1,18 +1,51 @@
 # Changelog
 
+## Version 2.1.0
+
+**Upgrading to 2.1.0 requires at least 2.0.0**
+
+**Changes:**
+
+- Added ARCHITECTURE.md which describes in a high-level how Arbiter2 functions.
+
+- Added CGROUPS.md which describes background knowledge on linux cgroups with some details on how Arbiter2 interacts with cgroups.
+
+- Schema was changed to better allow for deletion of nodes, and movement of nodes to different sync groups. These actions are currently not supported within the current toolset. See[SYNCRONIZATION.md file](SYNCRONIZATION.md#administrative-cleanup-upon-instance-removal) for details on manually removing hosts. The old statuses and badness scores will not be migrated. **In order to upgrade, all instances of Arbiter2 must be stopped. The first instance of each sync group started again will migrate the schema. All other instances can be started after that point.**
+
+- `allusers_corraller.sh` tool uses full usernames when looking for users. In the past the tool only grabbed the first few characters, and users with long names were ignored. 
+
+- Removed code that would email localhost if a mailserver could not be reached. This never fully worked, so it is unlikely to affect usage. If an email cannot be looked up, Arbiter2 will instead send admins a warning message.
+
+- Added the `arbupdate.py` tool. This tool makes it possible for admins to change a users status manually e.g. remove a user from penalty. 
+
+**upgrading steps (with git):**
+1. git stash
+2. git pull
+3. git stash pop
+4. restart the arbiter service: `systemctl restart arbiter2`
+5. ensure that the automatic schema change succedded (logs have more detail)
+
+**upgrading steps (without git):**
+1. clone the new update into a new directory
+2. copy the old configuration file over (if applicable).
+3. restart the arbiter service: `systemctl restart arbiter2`
+4. ensure that the automatic schema change succedded (logs have more detail)
+
+**example:**
+```
+mkdir arbiter2/2.1.0
+git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/2.1.0
+cp arbiter2/1.3.2/etc/config.toml arbiter2/2.1.0/etc
+ln -s arbiter2/2.1.0 arbiter2/latest
+systemctl restart arbiter2
+systemctl status arbiter2
+```
+
 ## Version 2.0.0
 
 **Changes:**
 
 - Add multi-login node syncronization. This can be implicitly enabled by having multiple Arbiter2 instances use the same remote database (it cannot be the default sqlite database `statuses.db`, though it can be a MySQL/MariaDB, PostgreSQL or Microsoft SQL Server) via the `statusdb_url` configuration option. If this option is not set, Arbiter will default to a local sqlite database at the configured log location (which includes using existing `statuses.db` databases). Note that Arbiter does not import previous statuses (i.e. penalties) from the old statuses databases found in the log location when `statusdb_url` is first added. Furthermore, new sqlite `statuses.db` databases created by Arbiter2 version 2 are not compatabile with older Arbiter versions, however older databases are compatable with this version. The log databases (`logdb.db`) have not changed.
-    - It is recommended that the [SYNCHRONIZATION.md](SYNCHRONIZATION.md) document be read before deploying. It explains how and what Arbiter2 synchronizes between nodes.
-- Create a new Prometheus exporter: `tools/arbiter_exporter.py` that will export User cgroup usage, badness, and Arbiter2's configuration.
-- Introduce new shared memory threshold for whether to collect the PSS memory metric for a particular process. This should help decrease Arbiter2's CPU usage on nodes with high amounts of memory usage.
-- Added some small optimizations to help reduce CPU usage when Arbiter is collecting per-process usage.
-
-**Bugfixes:**
-- Logged out when Arbiter2 is waiting for users to log onto the machine instead of silently waiting. Background: Upon startup, Arbiter2 will check for whether the per-user CPU and memory cgroup hierarchy exists before proceeding with it's normal operations. This hierarchy can only be checked if there is a user logged in, so Arbiter2 blocks until there are users logged in (this is ok because if there are no users logged in, Arbiter2 has nothing to do).
-- Fixed an issue on some CentOS 8 machines that caused Arbiter2 to lock up on startup. This was because Arbiter2 assumed that the `cpu` and `cpuacct` controllers were both mounted at `cpu,cpuacct`.
 
 **Upgrading steps (with git):**
 1. git stash

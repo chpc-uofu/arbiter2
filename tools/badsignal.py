@@ -76,7 +76,7 @@ def main(args):
         if args.debug:
             debug_info = {
                 "Whitelisted Usage": (whlist_cpu_usage, 0.0),
-                "Process Usage": user_obj.avg_proc_usage(whitelisted=False)
+                "Process Usage": user_obj.last_proc_usage(whitelisted=False)
             }
             for event in range(repetitions)[::-1]:  # .history goes backwards
                 proc_list = list(user_obj.history[event]["pids"].values())

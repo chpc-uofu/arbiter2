@@ -137,10 +137,11 @@ def sync_statuses(users, statusdb_obj):
     """
     user_statuses = {uid: user_obj.status for uid, user_obj in users.items()}
     try:
-        # Ensure other hosts are aware of our changes. We update statuses in
-        # triggers.py, but because the database can fail, we should try and
-        # write out our statuses every interval here
-        statusdb_obj.write_status(user_statuses)
+        # Reconcile what is in the DB for this user first, before syncing from
+        # elsewhere. This allows for external changes to the database to be
+        # propogated to us (e.g. arbupdate). This writes things out to the
+        # database before returning.
+        statusdb_obj.synchronize_status_from_ourself(user_statuses)
 
         # Now we'll sync and compare our statuses with other hosts
         modified_user_hosts = statusdb_obj.synchronize_status_from_other_hosts(user_statuses)
@@ -240,17 +241,22 @@ def create_statusdb():
     """
     statusdb_obj = statusdb.lookup_statusdb(cfg_db_consistency=True)
     # May throw an error, but we kinda need the database to be up...
-    was_created, is_v2 = statusdb_obj.create_status_database_if_needed(v2=True)
+    was_created, did_migrate = statusdb_obj.create_status_database_if_needed()
+
+    with_tablenames_string = "with status table '{}' and badness table '{}'".format(
+        *statusdb_obj.status_and_badness_tablenames()
+    )
 
     if was_created:
-        logger.info("Failed to find statusdb database; created one at %s",
-                    statusdb_obj.redacted_url())
-    elif is_v2:
-        logger.info("Using existing statusdb database at %s",
-                    statusdb_obj.redacted_url())
+        logger.info("Failed to find statusdb database; created one at %s %s",
+                    statusdb_obj.redacted_url(), with_tablenames_string)
+    elif did_migrate:
+        logger.info("Using existing statusdb database at %s %s; database has "
+                    "been migrated to a new schema",
+                    statusdb_obj.redacted_url(), with_tablenames_string)
     else:
-        logger.info("Using existing v1 statusdb database at %s (no syncing)",
-                    statusdb_obj.redacted_url())
+        logger.info("Using existing statusdb database at %s %s",
+                    statusdb_obj.redacted_url(), with_tablenames_string)
 
     cleanup_interval = 60 * 60  # Every hour or so seems reasonable
     statusdb_cleaner_obj = statusdb.StatusDBCleaner(statusdb_obj, cleanup_interval)

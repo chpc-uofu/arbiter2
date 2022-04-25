@@ -36,21 +36,16 @@ As noted in the storage representation subsection above, the way synchronization
 
 Presently, there is no automated tool or mechanism in Arbiter2 that can remove a host from the corresponding tables in the database. Instead, an administrator must remove these entries manually. The following is a guide on that:
 
-1. First, obtain the name of the sync group and status and badness table from the configuration. These are correspondingly stored in the `statusdb_sync_group`, `statusdb_status_tablename` and `statusdb_badness_tablename` options in the configuration. Some configuration options are hidden in the config when defaulted. These can be viewed using the `arbiter/cfgparser.py` tool with the `--print` flag (the `--eval-specials` is likely also useful here): `python3 ./arbiter/cfgparser CONFIG_LIST... --print`. Unless explicitly modified, `statusdb_status_tablename` and `statusdb_badness_tablename` are likely just `status` and `badness`.
+1. First, obtain the name of the sync group and status and badness table from the configuration. These are correspondingly stored in the `statusdb_sync_group`, `statusdb_status_tablename` and `statusdb_badness_tablename` options in the configuration. Some configuration options are hidden in the config when defaulted*. Unless explicitly modified, `statusdb_status_tablename` and `statusdb_badness_tablename` are likely just `status` and `badness`.
 
-2. Remove the instance's corresponding hostname from the `<statusdb_status_tablename>_<statusdb_sync_group>` status table and `<statusdb_badness_tablename>_<statusdb_sync_group>` badness table. For example, with a `general` sync group:
-
-```
-DELETE FROM status_general WHERE hostname='<removed-host>';
-DELETE FROM badness_general WHERE hostname='<removed-host>';
-```
-
-3. If there are no more hosts in the synchronization group, the sync group tables can be removed. For example, with a `general` sync group:
+2. Remove the instance's corresponding hostname from the `<statusdb_status_tablename>` status table and `<statusdb_badness_tablename>` badness table. For example, with a `general` sync group:
 
 ```
-DROP TABLE status_general;
-DROP TABLE badness_general;
+DELETE FROM status WHERE hostname='<removed-host>' AND sync_group='<sync-group>';
+DELETE FROM badness WHERE hostname='<removed-host>' AND sync_group='<sync-group>';
 ```
+
+_* These can be viewed using the `arbiter/cfgparser.py` tool with the `--print` flag (the `--eval-specials` is likely also useful here): `python3 ./arbiter/cfgparser CONFIG_LIST... --print`._
 
 ### Access Requirements
 

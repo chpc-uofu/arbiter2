@@ -32,32 +32,15 @@ def main(args, subject=None, message=None, to_email=None, bcc=None,
     if not reply_to:
         reply_to = cfg.email.reply_to
 
-    localhost_emails = set([addr for addr in to_email
-                            if addr.find("@localhost") != -1])
-    other_emails = set(to_email).difference(localhost_emails)
-
     # Attempt to send emails
-    if localhost_emails:
-        actions.send_email(
-            subject,
-            message,
-            list(localhost_emails),
-            bcc,
-            sender,
-            localhost=True,
-            reply_to=reply_to
-        )
-
-    if other_emails:
-        actions.send_email(
-            subject,
-            message,
-            list(other_emails),
-            bcc,
-            sender,
-            localhost=False,
-            reply_to=reply_to
-        )
+    actions.send_email(
+        subject,
+        message,
+        to_email,
+        bcc,
+        sender,
+        reply_to=reply_to
+    )
 
 def bootstrap(args):
     """

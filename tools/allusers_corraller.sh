@@ -10,6 +10,6 @@
 
 # Get all existing users on the machine (except root) and move their processes
 # to the appropriate user cgroup.
-for i in `w -h |awk '{print $1}' |sort |uniq |grep -v root`; do
+for i in `who -u |awk '{print $1}' |sort |uniq |grep -v root`; do
  ./user_corraller.sh $i
 done

@@ -1,0 +1,10 @@
+matplotlib 
+toml 
+requests 
+sqlalchemy
+# Arbiter2 uses the SQLAlchemy Python module to interface with various databases. Additional Python drivers will need to be installed, depending on the underlying database used:
+#cx_oracle  # oracle
+#pyodbc  # mssql
+#psycopg2  # postgresql
+#pymysql  # mysql
+#  # sqlite3 is supported without an external module

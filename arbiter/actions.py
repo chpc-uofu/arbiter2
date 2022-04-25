@@ -30,6 +30,23 @@ import integrations
 logger = logging.getLogger("arbiter." + __name__)
 
 
+def no_email_addr_recourse(uid, username):
+    """
+    Returns a new 'To:' list, an HTML error message, and a subject tag.
+
+    Why this? We kinda _need_ a email address and it is weird to not have one,
+    so we should scream loudly so admins can fix this...
+
+    user_obj: user.User()
+        The user to send the email to.
+    """
+    to = cfg.email.admin_emails
+    error_msg = ("<h2>Error: No user email adress for uid {} ({}) could be "
+                 "found!</h2><hr><br>").format(uid, username)
+    subject = "[ERROR]"
+    return to, error_msg, subject
+
+
 def send_warning_email(user_obj, metadata, status_group, table, badness_timestamp,
                        severity, plot_filepath, syncing_hosts):
     """
@@ -52,18 +69,26 @@ def send_warning_email(user_obj, metadata, status_group, table, badness_timestam
     syncing_hosts: [str, ]
         A set of hosts that statusdb is syncing with.
     """
+    message_body = ""
+    subject = ""
+
     username, realname, email_addr = metadata
-    to = [email_addr]
-    bcc = cfg.email.admin_emails
-    subject = integrations.warning_email_subject(sysinfo.hostname, severity,
-                                                 username, realname)
+    if not email_addr:
+        to, message_body, subject = no_email_addr_recourse(user_obj.uid, username)
+        bcc = []
+    else:
+        to = [email_addr]
+        bcc = cfg.email.admin_emails
+
+    subject += integrations.warning_email_subject(sysinfo.hostname, severity,
+                                                  username, realname)
 
     time_in_penalty = statuses.lookup_status_prop(status_group).timeout / 60
     penalty_cpu_quota, penalty_mem_quota = user_obj.status.quotas()
     cpu_quota, mem_quota = user_obj.status.quotas(default=True)
     num_cores = round(cpu_quota / 100, 1)
     core_text = "core" if num_cores == 1 else "cores"
-    message_body = integrations.warning_email_body(
+    message_body += integrations.warning_email_body(
         table,
         username,
         realname,
@@ -125,12 +150,11 @@ def send_warning_email(user_obj, metadata, status_group, table, badness_timestam
         bcc,
         cfg.email.from_email,
         plot_filepath,
-        localhost=True if to and "@localhost" in to else False,
         reply_to=cfg.email.reply_to
     )
 
 
-def send_nice_email(metadata, status_group):
+def send_nice_email(uid, metadata, status_group):
     """
     Prepare an email message to notify users when their penalty status has
     timed out and are back to their default status group.
@@ -140,32 +164,39 @@ def send_nice_email(metadata, status_group):
     status_group: str
         The new status group of the user.
     """
+    message = ""
+    subject = ""
+
     username, realname, email_addr = metadata
-    subject = integrations.nice_email_subject(
+    if cfg.general.debug_mode:
+        to = cfg.email.admin_emails
+        bcc = ()
+    elif not email_addr:
+        to, message, subject = no_email_addr_recourse(uid, username)
+        bcc = []
+    else:
+        to = [email_addr]
+        bcc = cfg.email.admin_emails
+
+    subject += integrations.nice_email_subject(
         sysinfo.hostname,
         username,
         realname,
         status_group
     )
-    message = integrations.nice_email_body(
+    message += integrations.nice_email_body(
         username,
         realname,
         status_group,
         time.strftime("%H:%M on %m/%d", time.localtime(int(time.time())))
     )
-    to = [email_addr]
-    bcc = cfg.email.admin_emails
-    if cfg.general.debug_mode:
-        to = cfg.email.admin_emails
-        bcc = ()
 
     send_email(
         subject,
         message,
         to,
         bcc,
-        cfg.email.from_email,
-        localhost=True if to and "@localhost" in to else False,
+        cfg.email.from_email, 
         reply_to=cfg.email.reply_to
     )
 
@@ -213,8 +244,8 @@ def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage):
     send_email(subject, message, cfg.email.admin_emails, [], cfg.email.from_email)
 
 
-def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
-               localhost=False, reply_to=""):
+def send_email(subject, html_message, to, bcc, sender, image_attachment=None, 
+               reply_to=""):
     """
     Sends a given (HTML) email.
 
@@ -230,10 +261,6 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
         An optional image location to be attached. A attached image can be
         inserted in the actual body of the text by adding a
         "<img src='cid:name'>".
-    localhost: bool
-        Attempts to send mail to local users on the machine (/var/spool).
-        Requires that all the recipients end with a "@localhost".
-        e.g. "username@localhost"
     reply_to: str
         The reply-to email address to be specified in the headers.
     """
@@ -269,7 +296,7 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
 
     # Send the message
     if email["bcc"] or email["to"]:
-        mail_server = cfg.email.mail_server if not localhost else "localhost"
+        mail_server = cfg.email.mail_server 
         try:
             with smtplib.SMTP(mail_server) as smtp:
                 smtp.send_message(email)
@@ -455,7 +482,7 @@ def user_nice_email(uid, new_status_group):
         The new status group to that has been applied to the user.
     """
     metadata = integrations.get_user_metadata(uid)
-    send_nice_email(metadata, new_status_group)
+    send_nice_email(uid, metadata, new_status_group)
 
 
 def user_warning_email(user_obj, new_status_group, badness_timestamp,

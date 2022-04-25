@@ -226,6 +226,26 @@ class Status(types.SimpleNamespace):
         self.authority = sysinfo.hostname
         return self.current
 
+    def resolve_with_ourself(self, other_status):
+        """
+        Resolves the most up-to-date status into self.
+
+        Returns whether or not we adopted the other_status
+
+        See StatusDB.synchronize_status_from_ourself for how this is used.
+        """
+        max_timestamp = max(self.timestamp, self.occur_timestamp)
+        other_max_timestamp = max(other_status.timestamp, other_status.occur_timestamp)
+        if other_max_timestamp > max_timestamp:
+            self.current = other_status.current
+            self.default = other_status.default
+            self.occurrences = other_status.occurrences
+            self.timestamp = other_status.timestamp
+            self.occur_timestamp = other_status.occur_timestamp
+            self.authority = sysinfo.hostname
+            return True
+        return False
+
     def resolve_with_other_hosts(self, host_statuses):
         """
         Given a dictionary of statuses on other hosts, resolves the most
@@ -379,6 +399,17 @@ class Status(types.SimpleNamespace):
             iso_occur_ts,
             self.authority
         )
+
+    def override_status_group(self, new_status_group):
+        """
+        Sets the current status group, removing penalty occurrences if needed.
+        The timestamps are set slightly into the future so that this status
+        will take priority over another status in resolve_with_self.
+        """
+        self.current = new_status_group
+        self.occurrences = 0
+        self.timestamp = int(time.time() + (2 * cfg.general.arbiter_refresh))
+        self.occur_timestamp = self.timestamp
 
 
 def lookup_is_penalty(status_group):

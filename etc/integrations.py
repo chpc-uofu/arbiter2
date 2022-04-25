@@ -354,7 +354,6 @@ def get_user_metadata(uid):
             email_addr = email_addr_placeholder(username)
         else:
             logger.warning("Could not find the username or email address of "
-                           "user: {}! Email will attempt to be sent to "
-                           "localhost.".format(uid))
-            email_addr = "localhost"
+                           "user: {}! Email to user will not sent!".format(uid))
+            email_addr = ""
     return UserMetadata(username, realname, email_addr)

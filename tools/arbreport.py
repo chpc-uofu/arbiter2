@@ -275,7 +275,6 @@ def main(
             email_to,
             [],
             email_from,
-            localhost=False,
             reply_to=reply_to
         )
 
