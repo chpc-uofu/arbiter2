@@ -1,6 +1,9 @@
 <img src="resources/arbiter2.png" width="150px" />
 
 # Arbiter2
+
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+
 Arbiter2 monitors and protects interactive nodes with [cgroups](https://en.wikipedia.org/wiki/Cgroups). It records the activity on nodes, automatically sets limits on the resources available to each user, and notifies users and administrators by email when users are penalized for using excessive resources. Arbiter2 can also optionally synchronize these penalties and the states of users across interactive nodes. A technical paper has been written on the program and is [available on the ACM Digital Library](https://doi.org/10.1145/3332186.3333043) and the [primary author's homepage](https://dylngg.github.io/resources/arbiterTechPaper.pdf).
 
 Arbiter2 is written by the [University of Utah Center for High Performance Computing](https://www.chpc.utah.edu/), with some contributions from [Idaho National Laboratory](https://inl.gov).
