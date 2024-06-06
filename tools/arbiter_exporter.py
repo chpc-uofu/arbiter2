@@ -342,7 +342,7 @@ class ArbiterCollector:
             per_user_status = self.statusdb_obj.read_status()
         except statusdb.common_db_errors as err:
             logger.error("Failed to read statuses in statusdb %s: %s",
-                         cfgparser.redacted_url(self.statusdb_obj.db_url), err)
+                         cfgparser.redacted_url(self.statusdb_obj.url), err)
             return
 
         for uid in uids:
