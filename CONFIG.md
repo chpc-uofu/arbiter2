@@ -223,7 +223,7 @@ A default of 4 MiB was choosen based on an observation that on CHPC systems few 
 
 **whitelist_other_processes** _(optional/defaulted: true)_: `boolean`
 
-- Arbiter2 can optionally label the difference between cgroup and pid usage (which can be large if there are short lived processes) as "other processes". This is intended to get around the fact that if short lived processes run between Arbiter2's collection intervals, there will be unaccounted usage that is less than the recorded cgroup usage. This "other processes" usage can be whitelisted to prevent Arbiter2 from calling out bad usage, even when it may not fully know where it is coming from, including whether the unknown usage comes from whitelisted processes. In particular, users running compiliers likely are susceptible to high ammounts of "other processes".
+- Arbiter2 can optionally label the difference between cgroup and pid usage (which can be large if there are short lived processes) as "other processes". This is intended to get around the fact that if short lived processes run between Arbiter2's collection intervals, there will be unaccounted usage that is less than the recorded cgroup usage. This "other processes" usage can be whitelisted to prevent Arbiter2 from calling out bad usage, even when it may not fully know where it is coming from, including whether the unknown usage comes from whitelisted processes. In particular, users running compiliers likely are susceptible to high amounts of "other processes".
 
 **whitelist** _(optional/defaulted: [])_: `list of string`
 
@@ -231,7 +231,7 @@ A default of 4 MiB was choosen based on an observation that on CHPC systems few 
 
 **whitelist_file** _(optional/defaulted: "")_: `string`
 
-- The filepath to the whitelist (either relative to `arbiter.py` or an abspath). Each item in the whitelist should be on a newline. See above for how the whitelist works.
+- The filepath to the whitelist (either relative to `arbiter.py` or an abspath). Every non-empty line in the file will be included verbatim as an item in the whitelist.
 
 **proc_owner_whitelist** _(optional/defaulted: [0])_: `list of int`
 
