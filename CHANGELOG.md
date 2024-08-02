@@ -69,7 +69,7 @@ systemctl status arbiter2
 **example:**
 ```
 mkdir arbiter2/2.0.0
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/2.0.0
+git clone https://github.com/chpc-uofu/arbiter2.git arbiter2/2.0.0
 cp arbiter2/1.3.2/etc/config.toml arbiter2/2.0.0/etc
 ln -s arbiter2/2.0.0 arbiter2/latest
 pip3 install sqlalchemy  # required for v2.0.0
@@ -121,7 +121,7 @@ systemctl restart arbiter2
 **Example:**
 ```
 mkdir arbiter2/1.4.0
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.4.0
+git clone https://github.com/chpc-uofu/arbiter2.git arbiter2/1.4.0
 cp arbiter2/1.3.3/etc/config.toml arbiter2/1.4.0/etc
 # Merge new load average reporting in integrations.py and overall_high_usage_email_template.txt into previous files
 ln -s arbiter2/1.4.0 arbiter2/latest
@@ -155,7 +155,7 @@ systemctl restart arbiter2
 **example:**
 ```
 mkdir arbiter2/1.3.3
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.3.3
+git clone https://github.com/chpc-uofu/arbiter2.git arbiter2/1.3.3
 cp arbiter2/1.3.2/etc/config.toml arbiter2/1.3.3/etc
 ln -s arbiter2/1.3.3 arbiter2/latest
 systemctl restart arbiter2
@@ -196,7 +196,7 @@ systemctl restart arbiter2
 **Example:**
 ```
 mkdir arbiter2/1.3.2
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/1.3.2
+git clone https://github.com/chpc-uofu/arbiter2.git arbiter2/1.3.2
 cp arbiter2/1.3.1/etc/config.toml arbiter2/1.3.2/etc
 # Optionally add proc_owner_whitelist
 ln -s arbiter2/1.3.2 arbiter2/latest
