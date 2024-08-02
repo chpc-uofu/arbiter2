@@ -34,7 +34,7 @@
 **example:**
 ```
 mkdir arbiter2/2.1.0
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git arbiter2/2.1.0
+git clone https://github.com/chpc-uofu/arbiter2.git arbiter2/2.1.0
 cp arbiter2/1.3.2/etc/config.toml arbiter2/2.1.0/etc
 ln -s arbiter2/2.1.0 arbiter2/latest
 systemctl restart arbiter2

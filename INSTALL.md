@@ -12,14 +12,14 @@ A sample script called [setup.sh](setup.sh) can be used a reference for installi
 
 ### Acquiring the Arbiter2 source files
 
-You can either grab the code from git or from source files [here](https://gitlab.chpc.utah.edu/arbiter2/arbiter2).
+You can either grab the code from git or from source files [here](https://github.com/CHPC-UofU/arbiter2).
 
 ```bash
-VERSION=1.4.1  # See https://gitlab.chpc.utah.edu/arbiter2/arbiter2, likely a newer version
+VERSION=2.1.0  # See https://github.com/CHPC-UofU/arbiter2 likely a newer version
 
 PREFIX="/opt/"
 mkdir -p $PREFIX/src/
-git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git $PREFIX/src/Arbiter2
+git clone https://github.com/CHPC-UofU/arbiter2.git $PREFIX/src/Arbiter2
 cd $PREFIX/src/Arbiter2
 git checkout latest
 ```
@@ -27,11 +27,11 @@ git checkout latest
 Alternatively,
 
 ```bash
-VERSION=1.4.1  # See https://gitlab.chpc.utah.edu/arbiter2/arbiter2, likely a newer version
+VERSION=2.1.0  # See https://github.com/CHPC-UofU/arbiter2 likely a newer version
 
 mkdir $PREFIX/src/Arbiter2/
 cd $PREFIX/src/Arbiter2
-wget https://gitlab.chpc.utah.edu/arbiter2/arbiter2/-/archive/$VERSION/arbiter2-$VERSION.tar.gz
+wget https://github.com/CHPC-UofU/arbiter2/archive/refs/tags/v$VERSION.tar.gz
 ln -s latest arbiter2-$VERSION
 cd latest
 ```

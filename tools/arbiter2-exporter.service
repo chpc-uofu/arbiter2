@@ -1,6 +1,6 @@
 [Unit]
 Description=Arbiter2 Prometheus Exporter
-Documentation=https://gitlab.chpc.utah.edu/arbiter2/arbiter2
+Documentation=https://github.com/chpc-uofu/arbiter2
 # TODO: May need to change these depending on your setup (like adding network file system target)
 # Requires network to send mail and correctly get the hostname
 Wants=sendmail.service sssd.service network.target network-online.target
