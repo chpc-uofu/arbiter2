@@ -45,7 +45,7 @@ fi
 
 arbdir=`pwd`
 if ask_if "Do you want to clone Arbiter2 to cwd? (if no, will ask what directory is it in)" "y"; then
-  git clone https://gitlab.chpc.utah.edu/arbiter2/arbiter2.git
+  git clone https://github.com/CHPC-UofU/arbiter2.git
 
 elif read -p "What dir is it in? " arbdir && [ -d "$arbdir" ]; then
   cd "$arbdir"
