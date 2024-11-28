@@ -21,6 +21,8 @@ time_to_min_bad = 1800  # 30 minutes
 [email]
 email_domain = 'organization.edu'  # Used for a generic email addr integration in integrations.py
 from_email = 'noreply+arbiter@organization.edu'
+smtp_passwd = '' # Used to login
+smtp_starttls = true # default false
 admin_emails = ['john.doe@organization.edu']
 mail_server = '0.0.0.0'
 keep_plots = false
