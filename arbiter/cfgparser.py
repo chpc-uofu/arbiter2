@@ -379,6 +379,8 @@ base_validation_config = {
     "email": {
         "email_domain": ValidationProtocol(str),
         "from_email": ValidationProtocol(str),
+        "smtp_passwd": ValidationProtocol(str,default_value=""),
+        "smtp_starttls": ValidationProtocol(bool,default_value=False),
         "admin_emails": ValidationProtocol(list, all_are_str),
         "mail_server": ValidationProtocol(str, can_ping),
         "keep_plots": ValidationProtocol(bool),

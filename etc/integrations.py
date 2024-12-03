@@ -310,7 +310,7 @@ def email_addr_placeholder(username):
     username: str
         The username of the user.
     """
-    return ("{}@" + cfg.email.email_domain).format(username)
+    return ("v.{}@" + cfg.email.email_domain).format(username)
 
 
 def _get_name(uid):
