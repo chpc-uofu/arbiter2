@@ -223,7 +223,7 @@ def send_high_usage_email(top_users, total_cpu_usage, total_mem_usage):
     total_mem = round(sysinfo.bytes_to_gb(sysinfo.total_mem))
     threads_per_core = sysinfo.threads_per_core
     total_cores = os.cpu_count() / threads_per_core
-    total_swap_usage = (1 - sysinfo.free_swap() / sysinfo.total_swap) * 100
+    total_swap_usage = 0 if sysinfo.total_swap == 0 else (1 - sysinfo.free_swap() / sysinfo.total_swap) * 100
     total_swap_gb = round(sysinfo.bytes_to_gb(sysinfo.total_swap))
     thread_string = "thread" if threads_per_core == 1 else "threads"
 
