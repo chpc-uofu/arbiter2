@@ -36,7 +36,7 @@ ln -s latest arbiter2-$VERSION
 cd latest
 ```
 
-See [UPGRADING.md](UPGRADING.md) for details on how Arbiter2 will be updated. Instructions for how to upgrade from the previous versions will be found in [CHANGELOG.md](CHANGELOG.md).
+See [UPDATING.md](UPDATING.md) for details on how Arbiter2 will be updated. Instructions for how to upgrade from the previous versions will be found in [CHANGELOG.md](CHANGELOG.md).
 
 ### Updating service file with install location
 
