@@ -60,8 +60,8 @@ def has_pss_permissions(logger_instance=startup_logger):
     """
     logger_instance.debug("Checking root or CAP_SYS_PTRACE capability")
     try:
-        with open("/proc/1/smaps", "r") as smaps:
-            smaps.readlines()
+        with open("/proc/1/smaps", "rb") as smaps:
+            smaps.read(1)
         return True
     except PermissionError:
         return False
