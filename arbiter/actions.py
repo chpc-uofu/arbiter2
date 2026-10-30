@@ -296,9 +296,14 @@ def send_email(subject, html_message, to, bcc, sender, image_attachment=None,
 
     # Send the message
     if email["bcc"] or email["to"]:
-        mail_server = cfg.email.mail_server 
+        mail_server = cfg.email.mail_server
+        smtp_starttls = cfg.email.smtp_starttls
+        smtp_passwd = cfg.email.smtp_passwd
         try:
             with smtplib.SMTP(mail_server) as smtp:
+                if (smtp_starttls == True and smtp_passwd != ''):
+                    smtp.starttls()  # Start TLS encryption
+                    smtp.login(email["From"], smtp_passwd)  # Login                
                 smtp.send_message(email)
         except Exception as err:
             logger.debug(err)
